@@ -106,6 +106,7 @@ What else you need:
 | Choose photos | Under each photo pick **Clean** or **Original**, move it with **‹ ›**, or remove it |
 | Post | Tap **Post on Vinted**, then tap again to confirm. **Save as a Vinted draft** sends it to your drafts instead |
 | See what buyers get | **👀 See the photos as buyers will** under the photos shows them with the stickers and the QR code |
+| Check for new messages | Pull the list down from the top and let go (or tap **Refresh**). Your listings update too |
 | Answer a buyer | **Messages** (the number is how many are unread), tap a conversation, write, **Send**. Opening it marks it as read on Vinted |
 | Delete a listing | **On Vinted**, tap the listing, **Delete from Vinted**, then tap again to confirm. It's gone on Vinted for good |
 

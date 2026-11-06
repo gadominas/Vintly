@@ -194,6 +194,21 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   await until(`(document.querySelector('[data-act="tab"][data-v="msgs"] .n') || {}).textContent === '1'`);
   ok(true, 'one unread left');
 
+  console.log('Pull to refresh');
+  state.convs.unshift({ id: 'c0a8-04', who: 'jonas_p', item: 'Rūšiuoklis su formomis / Shape sorter', k: 'c2', unread: true, msgs: [['them', 'Ar dar turite?', 1]] });
+  const drag = async (dy) => page.evaluate((dy) => {
+    const t = document.querySelector('#main'), fire = (type, y) => { const e = new Event(type, { bubbles: true }); e.touches = y == null ? [] : [{ clientY: y }]; t.dispatchEvent(e); };
+    fire('touchstart', 100); for (let y = 100; y <= 100 + dy; y += 20) fire('touchmove', y); fire('touchend');
+  }, dy);
+  await drag(60);
+  await sleep(300);
+  ok(!(state.convs[0].seen), 'a short drag only bounces back');
+  ok(await page.$eval('#ptr', (e) => !e.classList.contains('busy')), 'no refresh for a short drag');
+  await drag(200);
+  ok(await page.$eval('#ptr', (e) => e.classList.contains('busy') && /Checking/.test(e.textContent)), 'a long drag refreshes, with a spinner');
+  await until(`(document.querySelector('[data-act="tab"][data-v="msgs"] .n') || {}).textContent === '2' && !document.querySelector('#ptr.busy')`, null, 20000);
+  ok(true, 'the new message came in and the spinner is gone');
+
   console.log('Your listings');
   await page.click('[data-act="tab"][data-v="posted"]');
   await until(`document.querySelectorAll('#main [data-act="vopen"]').length === 5`);
@@ -212,7 +227,7 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   emu.presented = null;
   const w = JSON.parse(emu.files.get(sc.LOCAL + '/vintly-widget.json').toString());
   ok(w.todo === 2 && w.recent.length === 1 && w.posted7 === 1, 'widget snapshot: 2 to post, 1 posted this week');
-  ok(w.signedIn && w.unread === 1 && w.convs.length === 3 && w.convs[0].unread && w.listings === 3 && w.sold === 1, `widget snapshot: 1 unread message, 3 listings, 1 sold (${w.unread}, ${w.listings}, ${w.sold})`);
+  ok(w.signedIn && w.unread === 2 && w.convs.length === 4 && w.convs[0].unread && w.listings === 3 && w.sold === 1, `widget snapshot: 2 unread messages, 3 listings, 1 sold (${w.unread}, ${w.listings}, ${w.sold})`);
   ok(!JSON.stringify(w).includes('8 €'), 'the widget never holds message texts');
 
   ok(!emu.errors.length, 'no script or page errors' + (emu.errors.length ? ': ' + emu.errors.join(' | ').slice(0, 400) : ''));
