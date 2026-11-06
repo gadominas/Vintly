@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -1556,6 +1556,12 @@ async function handle(m) {
     case "vsignin": { const ok = await vintedSignIn(); toast(ok ? `Signed in to ${siteOf()}` : vintedCheck.why ? `Couldn't check Vinted: ${vintedCheck.why}` : `Not signed in to ${siteOf()} yet`); return push(); }
     // Your Vinted account: listings (with delete) and messages
     case "acctrefresh": return refreshAccount(m.v !== "inbox", true);
+    case "pullrefresh": {   // pull to refresh: the sign-in check if needed, then your listings and messages
+      if (!settings.vintedOk || Date.now() - (settings.vintedAt || 0) > 3600e3) await vintedCheck();
+      if (settings.vintedOk) await refreshAccount(true, true); else { push(); toast(`Not signed in to ${siteOf()}. Sign in from Settings › Vinted.`); }
+      track("pulled_to_refresh", { tab: ["todo", "posted", "msgs"].includes(m.tab) ? m.tab : "other" });
+      return call("ptrChecked");
+    }
     case "vdel": {
       const id = +m.v; if (!id || vLoading.del) return;
       vLoading.del = id; push();
@@ -1823,11 +1829,43 @@ function clientApp() {
   // ---- bridge ← Scriptable ----
   window.recv = st => {
     S = st; aiLoading.clear();
+    if (ptrAt && Date.now() - ptrAt > 300 && !((S.vt || {}).loading || {}).inbox && !((S.vt || {}).loading || {}).wardrobe && !ptrChecking) ptrDone();
     if (S.batch && !bg) batchOpen = true;
     if (!S.batch) { bg = null; bgSig = ""; batchOpen = false; }
     if (openId && !byId(openId)) openId = null;
     renderAll(); renderUsageAsk();
   };
+  // ---- pull to refresh: drag the list down from the very top (not inside a sheet) ----
+  const PTR_AT = 64;
+  let ptrY = null, ptrD = 0, ptrAt = 0, ptrChecking = false;
+  function ptrShow(d, drag) {
+    const el = $("#ptr"); if (!el) return;
+    el.classList.toggle("drag", !!drag); el.style.height = Math.round(d) + "px";
+    el.classList.toggle("ready", d >= PTR_AT && !ptrAt);
+    el.querySelector(".ptr-txt").textContent = ptrAt ? (S.vinted.ok ? "Checking Vinted…" : "Checking your sign-in…") : d >= PTR_AT ? "Release to refresh" : "Pull to refresh";
+  }
+  function ptrStart() {
+    ptrAt = Date.now(); $("#ptr").classList.add("busy"); ptrShow(52);
+    ptrChecking = true; send("pullrefresh", { tab });
+    setTimeout(() => { if (ptrAt && Date.now() - ptrAt >= 45000) ptrDone(); }, 45000);   // never spin for ever
+  }
+  function ptrDone() { ptrAt = 0; const el = $("#ptr"); if (el) { el.classList.remove("busy", "ready"); ptrShow(0); } }
+  window.ptrChecked = () => { ptrChecking = false; if (ptrAt && !((S.vt || {}).loading || {}).inbox && !((S.vt || {}).loading || {}).wardrobe) ptrDone(); };
+  document.addEventListener("touchstart", e => {
+    ptrY = null;
+    if (ptrAt || e.touches.length !== 1 || document.body.classList.contains("locked") || window.scrollY > 0) return;
+    if (e.target.closest && e.target.closest(".sheet, #upd, #aiinv, #decoview, input, textarea, select")) return;
+    ptrY = e.touches[0].clientY; ptrD = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", e => {
+    if (ptrY == null) return;
+    const d = e.touches[0].clientY - ptrY;
+    ptrD = d > 0 && window.scrollY <= 0 ? Math.min(120, d * 0.5) : 0;   // resistance: the indicator follows at half speed
+    ptrShow(ptrD, true);
+  }, { passive: true });
+  const ptrEnd = () => { if (ptrY == null) return; ptrY = null; if (ptrD >= PTR_AT) ptrStart(); else ptrShow(0); ptrD = 0; };
+  document.addEventListener("touchend", ptrEnd, { passive: true });
+  document.addEventListener("touchcancel", ptrEnd, { passive: true });
   window.toast = msg => {
     const t = $("#toast"); t.textContent = msg; t.classList.add("on");
     clearTimeout(window.__tt); window.__tt = setTimeout(() => t.classList.remove("on"), 3600);
@@ -2987,6 +3025,13 @@ textarea.fin{resize:vertical}
 @keyframes phPulse{to{box-shadow:0 0 0 3px var(--signal),0 0 26px rgba(45,212,191,.8)}}
 @keyframes bbBreathe{50%{filter:brightness(1.08) saturate(1.1)}}
 @keyframes orb{to{transform:scale(.8);opacity:.75}}
+/* Pull to refresh: drag the list down from the top */
+#ptr{height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--muted);font-size:calc(13px * var(--ts));font-weight:600;transition:height .25s ease}
+#ptr.drag{transition:none}
+#ptr .ptr-ico{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;border-radius:50%;background:var(--sheet);border:1px solid var(--rule);color:var(--signal);transition:transform .2s ease}
+#ptr.ready{color:var(--signal)} #ptr.ready .ptr-ico{transform:rotate(180deg)}
+#ptr.busy .ptr-ico{border:2px solid var(--rule);border-top-color:var(--signal);color:transparent;animation:ptrSpin .7s linear infinite}
+@keyframes ptrSpin{to{transform:rotate(360deg)}}
 /* A refused request, in full */
 .err-jump{display:block;width:100%;margin:10px 0 8px;text-align:left;background:var(--amber-wash);color:var(--danger);border:1px solid rgba(251,191,36,.45);border-radius:12px;padding:10px 12px;font:inherit;font-weight:600;font-size:calc(14px * var(--ts))}
 .errbox{margin:12px 0 0;background:var(--amber-wash);border:1px solid rgba(251,191,36,.45);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;color:var(--ink)}
@@ -3126,6 +3171,7 @@ textarea.fin{resize:vertical}
   .splash{animation:spOut .3s ease 1.6s forwards!important}
   .sheet,#aisheet,#toast,.switch,.switch::after,.bar i{transition:none}
   .pbar i,.pbar i::after,.pbar::after,.scanl,.bb-ph img,.orb,.ph.scan img{animation:none!important}
+  #ptr.busy .ptr-ico{animation-duration:2.4s}
   .scanl{opacity:.6;transform:translateY(80%)}
 }
 `;
@@ -3158,6 +3204,7 @@ const buildHTML = () => `<!doctype html><html data-theme="${initTheme()}" data-f
   <nav id="tabs" class="tabs" aria-label="Items"></nav>
 </header>
 <div id="usageslot"></div>
+<div id="ptr" aria-hidden="true"><span class="ptr-ico">↓</span><span class="ptr-txt">Pull to refresh</span></div>
 <main id="main"><div class="booting" role="status"><span class="busy-dot"></span>Loading your items…</div></main>
 <p class="ver">Vintly v${VERSION}</p>
 <input type="file" id="pickLib" accept="image/*" multiple hidden>
