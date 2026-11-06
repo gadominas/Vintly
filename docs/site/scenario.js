@@ -171,6 +171,7 @@ function routes(state) {
     if (/\/api\/v2\/photos/.test(u)) { state.uploads = (state.uploads || 0) + 1; return { json: { id: 37591437400 + state.uploads, width: 600, height: 800, temp_uuid: 'x', url: `https://images1.vinted.net/t/02_demo${state.uploads}_x/f800/1.webp?s=1` } }; }
     if (/package_sizes/.test(u)) return { json: PARCELS };
     if (/item_price_suggestions/.test(u)) { const id = (req.json() || {}).category_id, p = PRICES[id] || [5, 7, 9]; return { json: { price_suggestions: ['lower', 'optimal', 'higher'].map((s, i) => ({ strategy: s, price: { amount: p[i].toFixed(1), currency_code: 'EUR' } })) } }; }
+    if (/item_upload\/(items|drafts)/.test(u) && state.reject) { const r = state.reject; state.reject = null; return { status: 400, json: r }; }   // one refusal, as Vinted words it
     if (/item_upload\/(items|drafts)/.test(u)) { const b = req.json() || {}; (state.posted = state.posted || []).push(b); return { json: { code: 0, item: { id: 10690000000 + state.posted.length } } }; }
     return null;
   };
@@ -179,7 +180,7 @@ function routes(state) {
     { match: /icon-1024\.png/, respond: { file: path.join(__dirname, '..', 'icon-1024.png') } },
     { match: 'api.anthropic.com/v1/messages', respond: anthropic },
     { match: 'api.anthropic.com/v1/models', respond: { json: { data: [{ id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5', created_at: '2026-08-01T00:00:00Z' }] } } },
-    { match: 'api.openai.com/v1/images/edits', respond: () => { const k = (state.masks || []).shift() || 'a1'; return { json: { created: 1, data: [{ b64_json: img(k + '-mask.png').toString('base64') }], usage: { input_tokens: 1200, output_tokens: 1056 } } }; } },
+    { match: 'api.openai.com/v1/images/edits', respond: () => { const k = (state.masks || []).shift() || 'a1'; return { delay: state.slow || 0, json: { created: 1, data: [{ b64_json: img(k + '-mask.png').toString('base64') }], usage: { input_tokens: 1200, output_tokens: 1056 } } }; } },
     { match: 'api.openai.com/v1/models', respond: { json: { data: [{ id: 'gpt-4.1-mini', created: 1740000000 }, { id: 'gpt-image-1', created: 1745000000 }] } } },
     { match: /vinted\.(lt|net)/, respond: (req) => {   // api.vinted.lt answers the site's own page across origins, with its cookies
       const cors = { 'access-control-allow-origin': 'https://www.vinted.lt', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, x-csrf-token, x-anon-id, x-upload-form, accept', 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS' };

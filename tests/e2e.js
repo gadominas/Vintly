@@ -56,7 +56,18 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   ok(!!jacket, 'the ✦ name is kept as a hint');
   state.masks = ['a2', 'a1']; state.next = 'jacket';   // photo 1 went to item 2 and back, so it's now last
   await page.click(`.card[data-v="${jacket.id}"]`);
+  state.slow = 1800;   // the image model takes a while, so the scan and the bar can be seen
   await page.click('#itemsheet [data-act="prepare"]');
+  await until(`!!document.querySelector('#itemsheet .ph.scan.ph-clean') && !!document.querySelector('#itembusy .bb-ph.clean .scanl')`, null, 10000);
+  const bar1 = await page.$eval('#itembusy .pbar i', (e) => parseFloat(e.style.width));
+  await shot('3a-cleaning');
+  ok((await page.$$('#itemsheet .ph.scan')).length === 1, 'the photo being cleaned is scanned, one at a time');
+  ok(/Cleaning photo 1 of 2/.test(await page.textContent('#itembusy .bb-now')) && /\d+%/.test(await page.textContent('#itembusy .bb-pct')), 'what happens now, with a percentage');
+  await until(`/Cleaning photo 2 of 2/.test(document.querySelector('#itembusy .bb-now').textContent)`, null, 10000);
+  await sleep(300);
+  const bar2 = await page.$eval('#itembusy .pbar i', (e) => parseFloat(e.style.width));
+  ok(bar2 > bar1, `the bar moves on (${bar1}% → ${bar2}%)`);
+  state.slow = 0;
   await until(`!!document.querySelector('#itemsheet .ailbl') && !document.querySelector('#itembusy .steps') && !!document.querySelector('#itemsheet [data-act="prepare"]:not([disabled])')`, null, 60000);
   await sleep(600);
   await shot('3-item');
@@ -110,6 +121,26 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   await shot('3b-preview');
   ok(true, 'the buyer preview shows both photos decorated');
   await page.click('#decoview [data-act="decoclose"]');
+
+  console.log('Vinted says no, in detail');
+  state.reject = { code: 99, message: 'Rasta klaidų', message_code: 'validation_error', errors: [{ field: 'manufacturer_labelling', value: 'Nurodykite gamintojo informaciją' }, { field: 'price', value: 'Kaina per maža' }], payload: {} };
+  await page.evaluate(() => { const s = document.getElementById('itemsheet'); s.scrollTop = s.scrollHeight; });
+  await page.click('#itemsheet [data-act="post"]'); await page.click('#itemsheet [data-act="post"]');
+  await until(`!!document.querySelector('#itemsheet .errbox')`, null, 30000).catch(() => {});
+  await until(`!!document.querySelector('#itemsheet .errbox .eb-list')`, null, 60000);
+  const eb = await page.textContent('#itemsheet .errbox');
+  ok(/Vinted didn't take the item/.test(eb) && /Rasta klaidų/.test(eb) && /validation_error/.test(eb) && /HTTP 400/.test(eb), "the headline, Vinted's words, its code and the HTTP status");
+  ok(/Manufacturer labelling/.test(eb) && /Nurodykite gamintojo informaciją/.test(eb) && /Price/.test(eb) && /Kaina per maža/.test(eb), 'each problem with its field in plain words');
+  await page.evaluate(() => document.querySelectorAll('#itemsheet .errbox details').forEach((d) => { d.open = true; }));
+  ok(/"catalog_id": 2527/.test(await page.textContent('#itemsheet .errbox')), 'what Vintly sent is there to compare');
+  ok(/1 problem|2 problems/.test(await page.textContent('#itemsheet .err-jump')), 'next to the Post button: how many problems, a tap from the details');
+  await sleep(700);
+  const vis = await page.$eval('#itemsheet .errbox', (e) => { const r = e.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), h: innerHeight, st: document.getElementById('itemsheet').scrollTop }; });
+  ok(vis.top < vis.h && vis.bottom > 0, 'the details scroll into view by themselves ' + JSON.stringify(vis));
+  await shot('4a-error');
+  await page.click('#itemsheet [data-act="copyerr"]'); await sleep(400);
+  ok(/Rasta klaidų/.test(emu.pasteboard || '') && /Vintly sent/.test(emu.pasteboard || ''), 'Copy the details puts all of it on the clipboard');
+  ok(!(state.posted || []).length, 'nothing posted');
 
   console.log('Post it');
   await page.evaluate(() => { const s = document.getElementById('itemsheet'); s.scrollTop = s.scrollHeight; });

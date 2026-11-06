@@ -196,7 +196,7 @@ Vintly talks to Vinted the way Vinted's website does: a hidden web view opens yo
 | Problem | Try this |
 | --- | --- |
 | Not signed in to Vinted | Settings › Vinted › **Sign in**. Use e-mail, Apple or Facebook, not Google |
-| Posting fails with a message from Vinted | Open the item: **Still needed** lists missing fields. Or tap **Save as a Vinted draft** and finish on Vinted |
+| Posting fails with a message from Vinted | The item shows each problem Vinted named, by field. Fix those and post again, or tap **Save as a Vinted draft** and finish on Vinted. **Copy the details** gives you everything Vinted answered, to send along if you need help |
 | Photos aren't cleaned | Cleaning needs an OpenAI key that can use image models (OpenAI may ask you to verify your organisation for `gpt-image-1`) |
 | A cut-out has a halo or misses a part | Pick **Original** under that photo, or **Clean the photos again**; **Soft edge around the item** is in Settings › Photos |
 | Wrong category | Tap **Category** and search for the right one: the fields reload for it |
