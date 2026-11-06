@@ -2,6 +2,21 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.2.0 (2026-11-06): See what's happening
+
+- 🩺 **Vinted's errors, in full**: Each problem Vinted reports, by field, with what it sent back and a copy button.
+- 🔍 **Watch your photos being scanned**: A scan line sweeps over the photo being cleaned, read or uploaded.
+- 📊 **A livelier progress bar**: It glides as work goes on, with the percentage and the time so far.
+
+**Changes**
+
+- When Vinted refuses an item, Vintly lists each problem with the field in plain words (Price, Brand, Manufacturer labelling…), Vinted's own message and code, and the HTTP status
+- What Vinted sent back and what Vintly sent are one tap away; Copy the details puts it all on the clipboard
+- A new error scrolls into view by itself, and a short note by the Post button says how many problems there are
+- While preparing or posting, the photo being worked on is scanned (teal while cleaning, amber while ✦ AI reads, blue while uploading), also in a bigger preview above the bar
+- The progress bar moves through the whole job (cleaning, reading, Vinted's fields, uploading) with stripes and a glow, its percentage and the seconds so far; item cards show it too
+- Fixed in testing before release: uploading photos for a post could stop at once
+
 ## 1.1.0 (2026-11-06): Messages, listings and stickers
 
 - 💬 **Vinted messages in Vintly**: Unread count on open and on the widget; read and reply right here.
