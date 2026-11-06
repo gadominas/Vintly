@@ -2,6 +2,21 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.4.0 (2026-11-06): Every detail, looked up
+
+- 🔎 **Technical details from the web**: ✦ AI finds the exact product online: dimensions, weight, materials and specs.
+- 📝 **Added to the description**: They close the description under a heading, in both your languages.
+- 🏷️ **Barcodes and ISBNs**: A code on the item is looked up in free product databases first.
+
+**Changes**
+
+- While preparing, ✦ AI looks the item up on the web with your provider's own web search (Claude or OpenAI): the maker's pages first, then big shops and manuals
+- Up to 10 details for the exact product (or its family, marked “similar model”): dimensions, weight, materials, and what matters for that kind of item, from screen size and battery to pieces and age range
+- They're added at the end of the description under “Techniniai duomenys / Technical details”; looking up again replaces the block instead of repeating it
+- A barcode or ISBN that ✦ AI reads in the photos is checked in Open Library or UPCitemdb first (free, no key); without web search those records and the item's own labels are used
+- The item shows the details, the product found and the sources; if you wrote the description yourself, Add to the description puts them in when you want
+- Settings › AI settings › What AI does: Look up technical details on the web (on by default). Token usage shows the web searches next to the tokens
+
 ## 1.3.0 (2026-11-06): Pull to refresh
 
 - ⬇️ **Pull to refresh**: Drag the list down from the top to check Vinted for new messages and listing changes.
