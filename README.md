@@ -1,0 +1,207 @@
+<div align="center">
+
+<img src="docs/logo.svg" width="96" alt="Vintly logo: a price tag with a teal hole and an amber line">
+
+# Vintly
+
+**Snap. Price. Sell.**
+
+Photograph what you no longer need and Vintly turns the photos into Vinted listings: sorted into items, cleaned, written, priced and posted after your tap.<br>An iPhone and iPad app for [Scriptable](https://scriptable.app). One file, no server, no sign-up.
+
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgadominas%2FVintly%2Fmain%2Freleases.json&query=%24.releases%5B0%5D.version&label=version&color=2DD4BF&labelColor=0E1116&style=flat-square)](CHANGELOG.md)
+[![Platform](https://img.shields.io/badge/iOS-Scriptable-171B22?style=flat-square&labelColor=0E1116)](https://apps.apple.com/app/scriptable/id1405459188)
+[![AI](https://img.shields.io/badge/AI-Claude%20%7C%20OpenAI-171B22?style=flat-square&labelColor=0E1116)](#ai)
+[![Blueprints](https://img.shields.io/badge/built%20with-app--blueprints-171B22?style=flat-square&labelColor=0E1116)](docs/BLUEPRINTS.md)
+[![Last commit](https://img.shields.io/github/last-commit/gadominas/Vintly?style=flat-square&labelColor=0E1116&color=171B22&label=updated)](https://github.com/gadominas/Vintly/commits)
+[![License](https://img.shields.io/badge/license-MIT-171B22?style=flat-square&labelColor=0E1116)](LICENSE)
+
+</div>
+
+<p align="center">
+  <img src="docs/screenshots/01-list.png" width="31%" alt="Items to post, each with a photo, title and price">
+  <img src="docs/screenshots/02-sort.png" width="31%" alt="New photos sorted into three items">
+  <img src="docs/screenshots/03-item.png" width="31%" alt="An item with cleaned photos, title and description">
+</p>
+
+> [!NOTE]
+> Screenshots are rendered from the app's real interface with invented sample data. The items and their photos are drawn, not photographed.
+
+> [!IMPORTANT]
+> **Unofficial.** Not affiliated with, endorsed by or connected to Vinted. Vintly uses the same web requests as Vinted's own website, signed in as you, which Vinted's terms may not allow and which can change without notice. Use it with your own account and at your own risk. See [Disclaimer](#disclaimer).
+
+## Highlights
+
+- **Photos to items.** Take or pick photos of several things at once; AI sorts them into items, and you can move a photo with two taps.
+- **Clean backgrounds.** An OpenAI image model outlines the item and Vintly cuts your own photo along it onto white, so the item stays exactly as photographed. Or let the model redraw a studio photo (Vinted is told it's AI).
+- **Listings written for you.** Title, description, brand, condition and colours from the photos and your notes, in Lithuanian, English or another Vinted language, with a second language for buyers from abroad and a little humour if you like.
+- **Every Vinted field filled.** Category, size, material and the other fields the category asks for, matched against Vinted's own lists, plus the parcel size.
+- **A fair price.** Starts from Vinted's own price suggestion for the item, or the AI's used price, and goes a set share below it, rounded.
+- **You post.** Check everything, change any field, then tap **Post on Vinted** twice; or save a Vinted draft to finish on the website.
+- **Share sheet.** Share photos from Photos straight into Vintly.
+- **Home Screen widget** with items waiting and what you posted lately, a **launch screen**, **settings** with colours, layout and every limit, your own **AI key** with token usage, and **in-app updates**.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/04-fields.png" width="31%" alt="Vinted fields: category, brand, size, condition, colours and parcel">
+  <img src="docs/screenshots/05-vinted.png" width="31%" alt="Vinted sign-in">
+  <img src="docs/screenshots/06-post.png" width="31%" alt="Ready to post, with the price and the Post button">
+</p>
+<p align="center">
+  <img src="docs/screenshots/07-posted.png" width="31%" alt="Posted items">
+  <img src="docs/screenshots/08-empty.png" width="31%" alt="First open, with Take photos and Choose photos">
+  <img src="docs/screenshots/09-launch.png" width="31%" alt="Launch screen">
+</p>
+<p align="center">
+  <img src="docs/screenshots/10-settings.png" width="31%" alt="Settings">
+  <img src="docs/screenshots/11-ai-settings.png" width="31%" alt="AI settings with what AI does and the image model">
+  <img src="docs/screenshots/12-update.png" width="31%" alt="What's new sheet">
+</p>
+<p align="center">
+  <img src="docs/screenshots/13-dark.png" width="31%" alt="Dark theme">
+  <img src="docs/screenshots/14-widget.png" width="62%" alt="Home Screen widgets">
+</p>
+
+## Install
+
+1. Get **[Scriptable](https://apps.apple.com/app/scriptable/id1405459188)** (free) on your iPhone or iPad.
+2. In Scriptable, tap **+**, paste these two lines, name the script *Vintly Installer*, and tap **▶**:
+   ```js
+   const code = await new Request("https://raw.githubusercontent.com/gadominas/Vintly/main/install.js").loadString();
+   await eval("(async () => {" + code + "\n})()");
+   ```
+3. Tap **Open Vintly**. Sign in to Vinted when Vintly asks, then add a Claude or OpenAI key in Settings › AI settings for listings written from your photos.
+
+To update, tap **Update now** when Vintly offers a new version, or run *Vintly Installer* again. Your items, photos and settings are kept.
+
+<details>
+<summary><b>Install by hand</b></summary>
+
+Rather not use the loader? Paste [`install.js`](install.js) or [`Vintly.js`](Vintly.js) into a new script in Scriptable yourself.
+
+</details>
+
+What else you need:
+
+- A **Vinted account**. Sign in with e-mail, Apple or Facebook: Google doesn't allow signing in inside apps. If your account only uses Google, set a password on Vinted first.
+- An **OpenAI key** for cleaning photos (image models are OpenAI only). A **Claude or OpenAI key** for sorting and writing listings; one OpenAI key does both.
+- To share photos into Vintly: in Scriptable, open Vintly's settings (ⓘ) and turn on **Share Sheet Inputs › Images**. Vintly's script comes with it on.
+
+## How to use it
+
+| To… | Do this |
+| --- | --- |
+| Add items | Tap **Take photos** or **Choose photos**; take a few photos of each thing. Or share photos to Vintly from Photos |
+| Fix the sorting | Tap a photo, then the item it belongs to (or **+ A new item**). **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
+| Get a listing | Open an item, add notes if you know something the photos don't show (size, flaws, "never worn"), tap **Prepare**. Vintly cleans the photos, writes the listing, fills Vinted's fields and sets a price |
+| Change anything | Tap a field. Your changes stay when you prepare again |
+| Choose photos | Under each photo pick **Clean** or **Original**, move it with **‹ ›**, or remove it |
+| Post | Tap **Post on Vinted**, then tap again to confirm. **Save as a Vinted draft** sends it to your drafts instead |
+
+<details>
+<summary><b>How the price is set</b></summary>
+
+Vintly asks Vinted for its suggested price range for the item's category, brand and condition and takes the middle; if Vinted has none, it uses the AI's estimate of a usual used price. It then goes **Price below the usual** (20 %) under it, rounds to **Round prices to** (1) and never goes under **Lowest price** (2). All three are in Settings › Pricing.
+
+</details>
+
+<details>
+<summary><b>The two ways of cleaning photos</b></summary>
+
+- **Keep the item's pixels** (the default). The image model draws a black and white outline of the item; Vintly cuts your own photo along it, softens the edge, centres the item on white and keeps the photo's shape. Nothing on the item is redrawn.
+- **Studio photo.** The image model redraws the whole photo on white. Tidier, but drawn by AI, so Vintly marks the listing as having AI photos, as Vinted asks.
+
+**Original** under a cleaned photo switches back to your photo for that one.
+
+</details>
+
+## Widget
+
+Items waiting to be posted, drafts, and what you posted lately with its price. It is the shared [widgets](https://github.com/gadominas/app-blueprints/blob/main/blueprints/widgets.md) blueprint, so all the apps' widgets look alike.
+
+1. Long-press the Home Screen, tap **Edit › Add Widget**, choose **Scriptable** and a size.
+2. Long-press the widget, tap **Edit Widget**, set **Script** to *Vintly* and **When Interacting** to *Run Script*.
+
+Lock Screen widgets are added the same way under **Customize › Lock Screen**. The widget shows what Vintly saved the last time you used it, so it never signs in to Vinted itself.
+
+## AI
+
+AI sorts new photos into items, writes the title and description, picks the brand, condition, colours, category and Vinted's other fields from their lists, and estimates a used price. An OpenAI image model (`gpt-image-1` by default) outlines the item for cleaning.
+
+- **Your own key.** Open **Settings › AI settings**, add a [Claude](https://console.anthropic.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) key, pick any model the key can use and tap **Test connection**. **What AI does** turns sorting and cleaning on or off and picks the image model.
+- **Kept safe.** The key is typed into a native iOS prompt, stored in the iOS Keychain and sent only to its own provider. The app's page never sees it.
+- **You see the cost.** **AI settings › Token usage** shows tokens per day, feature and model. API use is billed by the provider, separately from any chat subscription.
+- **Optional.** Without a key you group the photos yourself, they're posted as taken, and you write the listing; **Load Vinted's fields** still loads the category's fields and Vinted's price suggestion.
+
+## Settings
+
+Tap the sliders icon at the top. Changes apply at once and are saved in `settings.json` in iCloud Drive › Scriptable › Vintly, so updates never reset them.
+
+| Section | What you can change |
+| --- | --- |
+| Appearance | Colours (Auto or six palettes), layout (Comfortable, Compact, Tiny), text size, headline font |
+| Vinted | Vinted site (vinted.lt, .pl, .de, .fr and others), your account (sign in, switch, check), remove photos after posting |
+| Listings | Language and a second language, both languages in the title, a little humour, AI settings |
+| Photos | Cleaning: keep the item's pixels, studio photo or off |
+| Privacy | Share anonymous usage, test the connection |
+| Updates | Offer new versions, check now, start-up log |
+| Pricing, Photos, AI, Vinted, Keeping items, Widget | How far below the usual price, rounding, lowest price; photo size, soft edge, room around the item, photos per item; photos AI looks at and their size; time limit for Vinted, category refresh; how long posted items stay; widget refresh, each with Reset |
+| Built with | The shared blueprints this app follows, with links (read-only) |
+
+## Updates and what's new
+
+Vintly checks this repository for a new version each time it opens. When one is out, a sheet shows its three best features with **Update now** and **Later**; Later hides the offer for two days. Your data and settings are kept. Every release is in [CHANGELOG.md](CHANGELOG.md). Vinted can change its website at any time; when posting stops working, an update is the fix.
+
+## Privacy and security
+
+- Your items, photos and settings live in Vintly's folder in iCloud Drive › Scriptable (on the iPhone when iCloud Drive is off). Your Vinted sign-in is Scriptable's web session, like a browser's; Vintly never sees or stores your password.
+- Photos go to your AI provider only when you tap **Prepare** or sort new photos, and to Vinted when you post. Listings go to Vinted only when you tap **Post** or **Save draft**.
+- AI keys stay in the iOS Keychain and are only sent to their own provider.
+- The update check only downloads `releases.json` from this repository.
+- **Anonymous usage**, if you say yes when asked (or in Settings › Privacy), sends counts such as app opens, photos added, items prepared and posted, with a random install ID, to [PostHog](https://posthog.com) (US cloud). Never your photos, titles, descriptions, prices, brands or Vinted account. Turning it off deletes the ID. The events are listed in [docs/BLUEPRINTS.md](docs/BLUEPRINTS.md#usage-events-usage-analytics-step-4).
+
+## How it works
+
+Vintly talks to Vinted the way Vinted's website does: a hidden web view opens your Vinted site, signed in with Scriptable's cookies, and runs the requests from inside the page (photo upload, category and field lists, brands, colours, parcel sizes, price suggestions and posting). Category: Vinted's own guess from the first photo plus words from the listing, then AI picks from the matches. Cleaning sends each photo, letterboxed to the image model's size, to OpenAI's image edit endpoint and cuts the original along the returned outline in the page's canvas.
+
+## Troubleshooting
+
+| Problem | Try this |
+| --- | --- |
+| Not signed in to Vinted | Settings › Vinted › **Sign in**. Use e-mail, Apple or Facebook, not Google |
+| Posting fails with a message from Vinted | Open the item: **Still needed** lists missing fields. Or tap **Save as a Vinted draft** and finish on Vinted |
+| Photos aren't cleaned | Cleaning needs an OpenAI key that can use image models (OpenAI may ask you to verify your organisation for `gpt-image-1`) |
+| A cut-out has a halo or misses a part | Pick **Original** under that photo, or **Clean the photos again**; **Soft edge around the item** is in Settings › Photos |
+| Wrong category | Tap **Category** and search for the right one: the fields reload for it |
+| Vintly stopped posting after working before | Vinted changed its website. Check for an update in Settings › Updates |
+
+## Built with
+
+- **[Scriptable](https://scriptable.app)** by Simon Støvring: one JavaScript file, a WebView for the interface.
+- **[app-blueprints](https://github.com/gadominas/app-blueprints)**: the shared in-app updates, settings, AI configuration, launch screen and widgets that every one of these apps uses, so they look and behave alike. **Settings › Built with** lists the versions; [docs/BLUEPRINTS.md](docs/BLUEPRINTS.md) adds the deviations.
+- **[OpenAI image models](https://platform.openai.com/docs/guides/image-generation)** for outlining items, and **[Claude](https://www.anthropic.com/claude)** or **OpenAI** for writing listings.
+
+Maintainers: release notes live in [`releases.json`](releases.json); see [docs/RELEASING.md](docs/RELEASING.md). Screenshots are regenerated with [repo-site](https://github.com/gadominas/app-blueprints/tree/main/repo-site) from [`docs/site/scenario.js`](docs/site/scenario.js); `tests/e2e.js` runs the whole flow in the emulator.
+
+## Disclaimer
+
+**Unofficial use of Vinted.** Vintly is not affiliated with, endorsed by or connected to Vinted UAB. It uses Vinted's website requests, signed in as you, which are not a public API: Vinted's terms may not allow automated listing, Vinted can change or block them at any time, and your account is your responsibility. Vintly never posts without your tap. Check every listing before you post it: AI can get the brand, size, condition or price wrong.
+
+A personal project, provided as is, without warranty. Vinted is a trademark of Vinted UAB. Claude is a trademark of Anthropic; OpenAI is a trademark of OpenAI.
+
+## More apps like this
+
+<p>
+  <a href="https://github.com/gadominas/StravaFeed"><img src="https://raw.githubusercontent.com/gadominas/StravaFeed/main/docs/icon-1024.png" width="44" alt="Strava Daily Digest"></a>&nbsp;
+  <a href="https://github.com/gadominas/BlogPulse"><img src="https://raw.githubusercontent.com/gadominas/BlogPulse/main/docs/icon-1024.png" width="44" alt="BlogPulse"></a>&nbsp;
+  <a href="https://github.com/gadominas/VisionX"><img src="https://raw.githubusercontent.com/gadominas/VisionX/main/docs/icon-1024.png" width="44" alt="VisionX"></a>&nbsp;
+  <a href="https://github.com/gadominas/Go2FGym"><img src="https://raw.githubusercontent.com/gadominas/Go2FGym/main/docs/icon-1024.png" width="44" alt="Go2FGym"></a>&nbsp;
+  <a href="https://github.com/gadominas/Tamo-"><img src="https://raw.githubusercontent.com/gadominas/Tamo-/master/docs/icon-1024.png" width="44" alt="Dienynas+"></a>&nbsp;
+  <a href="https://github.com/gadominas/Reading-Stars"><img src="https://raw.githubusercontent.com/gadominas/Reading-Stars/main/docs/icon-1024.png" width="44" alt="Reading Stars"></a>
+</p>
+
+<sub>Strava Daily Digest · BlogPulse · VisionX · Go2FGym · Dienynas+ · Reading Stars, all single-file Scriptable apps built on the same blueprints.</sub>
+
+## License
+
+[MIT](LICENSE) © 2026 Gediminas Siutilas

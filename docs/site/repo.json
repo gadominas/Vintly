@@ -1,0 +1,24 @@
+{
+  "description": "Snap. Price. Sell. Photograph what you no longer need and Vintly sorts the photos into items, cleans them, writes each Vinted listing with AI and posts it after your tap. A Scriptable app.",
+  "homepage": "https://github.com/gadominas/Vintly#readme",
+  "topics": [
+    "scriptable",
+    "scriptable-app",
+    "ios",
+    "iphone",
+    "javascript",
+    "app-blueprints",
+    "ai",
+    "claude",
+    "openai",
+    "vinted",
+    "second-hand",
+    "reselling",
+    "background-removal",
+    "listing-generator"
+  ],
+  "install": {
+    "kept": "Your items, photos and settings are kept.",
+    "firstRun": "Sign in to Vinted when Vintly asks, then add a Claude or OpenAI key in Settings › AI settings for listings written from your photos."
+  }
+}
