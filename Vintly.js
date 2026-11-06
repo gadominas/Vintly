@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -254,7 +254,7 @@ const settings = Object.assign(
     vintedSite: "vinted.lt",                                            // Vinted
     lang: "lt", lang2: "en", humour: true, bothTitles: true,            // Listings
     cleanStyle: "keep", removePhotosAfter: false, stickers: "all", qrBadge: true,   // stickers: all, kids (kids' items only), off                      // Photos: keep (the item's own pixels), studio (AI re-drawn), off
-    ai: true, aiClean: true,                                            // What AI does: sort new photos into items, clean photos
+    ai: true, aiClean: true, aiSpecs: true,                                            // What AI does: sort new photos into items, clean photos
     imageModel: "",                                                     // the OpenAI image model for cleaning ("" = IMAGE_MODEL)
     aiProvider: "anthropic",                                            // AI configuration
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
@@ -358,11 +358,12 @@ function removeKey(p) {
 var usage = { since: Date.now(), p: {} };   // read in loadData()
 const dayKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-function recordUsage(provider, model, feature, tin, tout) {
+function recordUsage(provider, model, feature, tin, tout, searches = 0) {
   const P = usage.p[provider] = usage.p[provider] || { calls: 0, in: 0, out: 0, models: {}, features: {}, days: {} };
   const b = (o, k) => o[k] = o[k] || { calls: 0, in: 0, out: 0 };
   for (const x of [P, b(P.models, model), b(P.features, feature), b(P.days, dayKey())]) {
     x.calls++; x.in += tin; x.out += tout;
+    if (searches) x.searches = (x.searches || 0) + searches;   // web searches are billed per search, apart from tokens
   }
   const days = Object.keys(P.days).sort();
   while (days.length > 400) delete P.days[days.shift()];   // keep about 13 months of days
@@ -394,9 +395,13 @@ async function fetchModels(p) {
 }
 
 // Every AI request goes through here. feature: the usage table's tag. images: base64 JPEGs the AI looks at.
-async function aiCall(system, user, maxTokens = 2500, feature = "other", provider = settings.aiProvider, images = []) {
+// opts.search: let the model search the web (the provider's own web search tool) up to that many times. Then the
+// answer's sources are in aiCall.sources and the number of searches is counted with the tokens.
+async function aiCall(system, user, maxTokens = 2500, feature = "other", provider = settings.aiProvider, images = [], opts = {}) {
   const key = keyFor(provider);
   if (!key) throw new Error(`No ${PROVIDERS[provider]} key saved`);
+  aiCall.sources = [];
+  if (opts.search) return aiSearchCall(system, user, maxTokens, feature, provider, images, opts.search);
   const openai = provider === "openai", model = modelFor(provider);
   const r = new Request(openai ? "https://api.openai.com/v1/chat/completions" : "https://api.anthropic.com/v1/messages");
   r.method = "POST";
@@ -418,6 +423,57 @@ async function aiCall(system, user, maxTokens = 2500, feature = "other", provide
     openai ? (u.completion_tokens || 0) : (u.output_tokens || 0));
   return openai ? ((j.choices && j.choices[0] && j.choices[0].message.content) || "")
                 : (j.content || []).map(c => c.text || "").join("");
+}
+
+// The same, with the provider's web search. Claude: the web_search server tool on /v1/messages (it pauses long turns:
+// the answer so far is sent back to continue). OpenAI: the web_search tool on /v1/responses (web_search_preview for
+// models that only know that one). The sources the answer cites come back in aiCall.sources.
+async function aiSearchCall(system, user, maxTokens, feature, provider, images, maxSearches) {
+  const key = keyFor(provider), model = modelFor(provider), sources = new Map();
+  const cite = (url, title) => { if (url && /^https?:/.test(url) && !sources.has(url)) sources.set(url, clip(title || url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0], 90)); };
+  if (provider === "openai") {
+    const content = [{ type: "input_text", text: user }].concat(images.map(d => ({ type: "input_image", image_url: "data:image/jpeg;base64," + d })));
+    const once = async (tool) => {
+      const r = new Request("https://api.openai.com/v1/responses");
+      r.method = "POST"; r.timeoutInterval = 180;
+      r.headers = { "Authorization": "Bearer " + key, "Content-Type": "application/json" };
+      r.body = JSON.stringify({ model, instructions: system, input: [{ role: "user", content }], tools: [{ type: tool }], tool_choice: "auto" });
+      return r.loadJSON();
+    };
+    let j = await once("web_search");
+    if (j.error && /web_search|tool/i.test(j.error.message || "")) j = await once("web_search_preview");
+    if (j.error) throw new Error(j.error.message || "AI web search failed");
+    const out = j.output || [], u = j.usage || {};
+    let text = "";
+    for (const o of out) for (const c of (o.type === "message" && o.content) || []) {
+      if (c.type === "output_text") { text += c.text || ""; (c.annotations || []).forEach(a => a.type === "url_citation" && cite(a.url, a.title)); }
+    }
+    recordUsage(provider, model, feature, u.input_tokens || 0, u.output_tokens || 0, out.filter(o => o.type === "web_search_call").length);
+    aiCall.sources = [...sources].map(([url, title]) => ({ url, title }));
+    return text || j.output_text || "";
+  }
+  const anUser = images.map(d => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } })).concat([{ type: "text", text: user }]);
+  const messages = [{ role: "user", content: anUser }];
+  let text = "";
+  for (let turn = 0; turn < 4; turn++) {
+    const r = new Request("https://api.anthropic.com/v1/messages");
+    r.method = "POST"; r.timeoutInterval = 180;
+    r.headers = { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" };
+    r.body = JSON.stringify({ model, max_tokens: maxTokens, system, messages, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }] });
+    const j = await r.loadJSON();
+    if (j.error) throw new Error(j.error.message || "AI web search failed");
+    const u = j.usage || {};
+    recordUsage(provider, model, feature, (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), u.output_tokens || 0,
+      (u.server_tool_use && u.server_tool_use.web_search_requests) || 0);
+    for (const c of j.content || []) {
+      if (c.type === "text") { text += c.text || ""; (c.citations || []).forEach(x => cite(x.url, x.title)); }
+      if (c.type === "web_search_tool_result" && Array.isArray(c.content)) c.content.slice(0, 3).forEach(x => cite(x.url, x.title));
+    }
+    if (j.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: j.content });   // a long search paused: send it back as it is to go on
+  }
+  aiCall.sources = [...sources].map(([url, title]) => ({ url, title })).slice(0, 8);
+  return text;
 }
 
 // For prompts that ask for JSON: tolerate code fences and stray text around it.
@@ -1094,6 +1150,8 @@ function listingPrompt(colors) {
  "materials": ["main materials in English, e.g. wood, plastic, cotton"],
  "size": "the size as printed (clothing, shoes), or the age range for children's items, else empty",
  "parcel": "S (fits a large envelope), M (fits a shoe box) or L (bigger)",
+ "barcode": "the digits of an EAN/UPC barcode or ISBN you can read in the photos, else empty",
+ "printed": "model numbers, product names and specs printed on the item, its label or box (e.g. 'Model X200, 12 V, 2.5 MP'), else empty",
  "price_new": typical new price in ${cur} as a number, or null,
  "price_used": what this item usually sells for second-hand on Vinted in ${cur}, as a number,
  "price_why": "one short English sentence on the price",
@@ -1117,7 +1175,7 @@ async function analyse(it) {
   it.ai = { at: Date.now(), by: PROVIDERS[settings.aiProvider], what: clip(j.what, 80), brand: clip(j.brand, 60), model: clip(j.model, 60),
     words: (j.category_words || []).map(w => clip(w, 60)).slice(0, 6), condition: CONDITIONS.some(c => c.code === j.condition) ? j.condition : "good",
     flaws: (j.flaws || []).map(f => clip(f, 120)).slice(0, 6), colors: (j.colors || []).slice(0, 2).map(String), materials: (j.materials || []).slice(0, 4).map(String),
-    size: clip(j.size, 40), parcel: ["S", "M", "L"].includes(j.parcel) ? j.parcel : "M",
+    size: clip(j.size, 40), barcode: String(j.barcode || "").replace(/[^0-9X]/gi, "").slice(0, 14), printed: clip(j.printed, 300), parcel: ["S", "M", "L"].includes(j.parcel) ? j.parcel : "M",
     priceNew: +j.price_new > 0 ? +j.price_new : null, priceUsed: +j.price_used > 0 ? +j.price_used : null, priceWhy: clip(j.price_why, 200),
     confidence: Math.max(0, Math.min(1, +j.confidence || 0)) };
   const L = it.listing = it.listing || {};
@@ -1130,6 +1188,93 @@ async function analyse(it) {
   L.aiText = { by: it.ai.by, at: it.ai.at };
   if (it.ai.priceUsed && !L.priceSet) L.price = fairPrice(it.ai.priceUsed, cfg("priceBelowPct"), cfg("priceRound"), cfg("priceMin"));
 }
+// ---------- technical details: dimensions, weight, materials, specs ----------
+// Free product databases first (no key, no cost): Open Library for an ISBN, UPCitemdb's free tier for an EAN/UPC.
+// Then ✦ AI with the provider's web search looks the product up (maker's pages and big shops) and returns the
+// details in the listing's language(s). What it finds is added at the end of the description, under a heading.
+async function productRecord(code) {
+  if (!code || code.length < 8) return null;
+  const get = async url => { const r = new Request(url); r.timeoutInterval = 15; r.headers = { accept: "application/json" }; return r.loadJSON(); };
+  try {
+    if (/^(97[89]\d{10}|\d{9}[\dX])$/i.test(code)) {   // a book
+      const b = await get(`https://openlibrary.org/isbn/${code}.json`);
+      if (b && b.title) return { source: "Open Library", url: `https://openlibrary.org/isbn/${code}`, title: b.title,
+        facts: { pages: b.number_of_pages, dimensions: b.physical_dimensions, weight: b.weight, format: b.physical_format, publisher: (b.publishers || []).join(", "), published: b.publish_date } };
+    }
+    if (/^\d{8,14}$/.test(code)) {
+      const u = await get(`https://api.upcitemdb.com/prod/trial/lookup?upc=${code}`), x = u && (u.items || [])[0];
+      if (x) return { source: "UPCitemdb", url: `https://www.upcitemdb.com/upc/${code}`, title: x.title,
+        facts: { brand: x.brand, model: x.model, dimensions: x.dimension, weight: x.weight, color: x.color, size: x.size, category: x.category } };
+    }
+  } catch (e) { startLog("product record: " + (e.message || e)); }
+  return null;
+}
+// The last JSON object in a text that holds the key (a web search answer may have text before it)
+function lastJSON(txt, key) {
+  const s = String(txt).replace(/```json|```/g, "");
+  for (let i = s.lastIndexOf("{"); i >= 0; i = s.lastIndexOf("{", i - 1)) {
+    const end = s.lastIndexOf("}");
+    try { const j = JSON.parse(s.slice(i, end + 1)); if (j && typeof j === "object" && key in j) return j; } catch (e) {}
+    if (i === 0) break;
+  }
+  return parseJSON(s);
+}
+async function lookUpSpecs(it) {
+  const A = it.ai || {}, L = it.listing || {};
+  const l1 = settings.lang, l2 = settings.lang2 && settings.lang2 !== settings.lang ? settings.lang2 : "";
+  const N1 = LANGS[l1] || "English", N2 = l2 ? LANGS[l2] : "";
+  const rec = await productRecord(A.barcode);
+  const what = [A.brand, A.model, A.what].filter(Boolean).join(" ");
+  const system = `You find the technical details of one second-hand item for its listing on Vinted. ` +
+    `Search the web for this exact product: the maker's own pages first, then big shops and manuals. ` +
+    `Use only facts you found for this exact product (or a database record given to you, or text printed on the item). Never guess: leave a detail out rather than invent it. ` +
+    `Reply with JSON only, after your searches.`;
+  const label = l2 ? `"label in ${N1} / label in ${N2}"` : `"label in ${N1}"`;
+  const user = `The item: ${what || "unknown"}.` + (A.printed ? `\nPrinted on it: ${A.printed}` : "") + (A.barcode ? `\nBarcode: ${A.barcode}` : "") +
+    (A.size ? `\nSize: ${A.size}` : "") + (A.materials && A.materials.length ? `\nMaterials seen: ${A.materials.join(", ")}` : "") +
+    (it.notes ? `\nThe seller says: ${clip(it.notes, 400)}` : "") +
+    (rec ? `\nDatabase record (${rec.source}): ${JSON.stringify(rec)}` : "") + `
+
+Return exactly this JSON:
+{
+ "product": "the exact product you found (brand, model, variant), or empty",
+ "match": "exact" (this very model), "similar" (same product family; then only details that hold for the family) or "none",
+ "heading": ${l2 ? `"'Technical details' in ${N1} / in ${N2}"` : `"'Technical details' in ${N1}"`},
+ "specs": [{ "label": ${label}, "value": "the value with units: metric first (cm, g, kg), the way a shop lists it" }]
+}
+Up to 10 specs, most useful first: dimensions (W × H × D), weight, materials, then what matters for this kind of item ` +
+    `(e.g. screen size, resolution, battery, power, connectivity, capacity, pieces, age range, pages). Values need no translation unless they are words.`;
+  let txt = "", via = "", srcs = [];
+  try {
+    txt = await aiCall(system, user, 3000, "specs", settings.aiProvider, [], { search: 4 });
+    srcs = aiCall.sources || []; via = "web";
+  } catch (e) {
+    startLog("specs web search: " + (e.message || e));
+    if (!rec && !A.printed) throw new Error("Couldn't look up the technical details: " + clip(e.message || e, 160));
+    txt = await aiCall(system.replace(/Search the web[^.]*\. /, ""), user, 1500, "specs");   // no web search here: the record and the item's own text
+    via = rec ? "record" : "printed";
+  }
+  const j = lastJSON(txt, "specs");
+  const specs = (j.specs || []).filter(s => s && s.label && s.value && !/unknown|n\/a|nežinoma/i.test(s.value)).slice(0, 10)
+    .map(s => ({ label: clip(String(s.label), 60), value: clip(String(s.value), 120) }));
+  if (rec) srcs = [{ url: rec.url, title: rec.source }].concat(srcs);
+  it.specs = { at: Date.now(), by: PROVIDERS[settings.aiProvider], via, product: clip(j.product || "", 120), match: ["exact", "similar", "none"].includes(j.match) ? j.match : "none",
+    heading: clip(j.heading || (l2 ? "Techniniai duomenys / Technical details" : "Technical details"), 80), list: specs, sources: srcs.slice(0, 6) };
+  if (!specs.length || it.specs.match === "none" && via === "web" && !rec) { it.specs.list = specs; return it.specs; }
+  if (!L.descSet) addSpecsToDescription(it);
+  return it.specs;
+}
+// The details as the description's last part; a block added earlier is replaced, never repeated.
+const specsBlock = S => S && S.list && S.list.length ? `${S.heading}:\n${S.list.map(s => `• ${s.label}: ${s.value}`).join("\n")}` : "";
+function addSpecsToDescription(it) {
+  const L = it.listing = it.listing || {}, block = specsBlock(it.specs);
+  let d = String(L.description || "");
+  if (L.specsBlock && d.includes(L.specsBlock)) d = d.replace(L.specsBlock, "").trim();
+  if (!block) return;
+  L.description = clip(d ? `${d}\n\n${block}` : block, 3000);
+  L.specsBlock = block;
+}
+
 // A photo for AI: the cleaned one if you use it, at the AI size (the page scales it).
 async function aiImage(it, ph) {
   const b64 = await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : ""));
@@ -1256,8 +1401,9 @@ async function prepare(id, opts = {}) {
   it.err = ""; it.errInfo = null;
   // The bar's stages, by how long each part takes: about 3 per photo cleaned, 3 for reading, 4 for Vinted's fields
   const doClean = opts.clean !== false && canClean(), nClean = doClean ? it.photos.filter(p => !p.clean || opts.reclean).length : 0;
-  const doRead = !!aiKey() && opts.read !== false, total = nClean * 3 + (doRead ? 3 : 0) + 4;
-  const endClean = nClean * 3 / total, endRead = endClean + (doRead ? 3 / total : 0);
+  const doRead = !!aiKey() && opts.read !== false, doSpecs = doRead && settings.aiSpecs !== false;
+  const total = nClean * 3 + (doRead ? 3 : 0) + (doSpecs ? 3 : 0) + 4;
+  const endClean = nClean * 3 / total, endRead0 = endClean + (doRead ? 3 / total : 0), endRead = endRead0 + (doSpecs ? 3 / total : 0);
   try {
     if (doClean) {
       const todo = it.photos.filter(p => !p.clean || opts.reclean);
@@ -1269,7 +1415,14 @@ async function prepare(id, opts = {}) {
       }
       if (todo.length) track("photos_cleaned", { photos: todo.length, ok: cleaned, style: settings.cleanStyle === "studio" ? "studio" : "keep" });
     }
-    if (doRead) { step.stage(endClean, endRead); step("✦ Reading the photos", 0, it.photos.slice(0, cfg("aiPhotos")).map(p => p.id), "read"); await analyse(it); write("items", items); push(); }
+    if (doRead) { step.stage(endClean, endRead0); step("✦ Reading the photos", 0, it.photos.slice(0, cfg("aiPhotos")).map(p => p.id), "read"); await analyse(it); write("items", items); push(); }
+    else if (it.specs && !(it.listing || {}).descSet) addSpecsToDescription(it);   // fresh text from you: the details stay at its end
+    if (doSpecs) {
+      step.stage(endRead0, endRead); step("✦ Looking up the technical details", 0, it.photos.slice(0, 1).map(p => p.id), "search");
+      try { const S = await lookUpSpecs(it); track("specs_found", { specs: S.list.length, via: S.via, match: S.match }); }
+      catch (e) { startLog("specs: " + (e.message || e)); toast("Technical details couldn't be looked up this time"); }
+      write("items", items); push();
+    }
     step.stage(endRead, 0.98); step.focus(it.photos.slice(0, 1).map(p => p.id), "match");
     if (settings.vintedOk || await vintedCheck()) await fitVinted(it, step);
     else it.err = "Sign in to Vinted (Settings › Vinted) to fill in Vinted's fields.";
@@ -1385,7 +1538,8 @@ function inviteIfDue() {
 function itemView(it) {
   const posted = it.status === "posted";
   return {
-    id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null,
+    id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", specs: it.specs || null, specsIn: !!(it.specs && it.listing && it.listing.specsBlock && String(it.listing.description || "").includes(it.listing.specsBlock)),
+    err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null,
     listing: it.listing || {}, ai: it.ai || null, vinted: it.vinted || null, cover: it.cover || "", fitAt: it.fitAt || 0,
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
@@ -1436,7 +1590,7 @@ function clientState() {
     settings: {
       tab: settings.tab, vintedSite: siteOf(), lang: settings.lang, lang2: settings.lang2, humour: settings.humour !== false, bothTitles: settings.bothTitles !== false,
       cleanStyle: settings.cleanStyle || "keep", removePhotosAfter: !!settings.removePhotosAfter, stickers: settings.stickers || "all", qrBadge: settings.qrBadge !== false,
-      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
+      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiSpecs: settings.aiSpecs !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
       checkUpdates: settings.checkUpdates !== false, shareUsage: !!settings.shareUsage,
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
@@ -1468,7 +1622,7 @@ async function evcOne(expr, ms) {
   try { return JSON.parse(out || "null"); } catch (e) { return null; }
 }
 
-const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "imageModel",
+const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "aiSpecs", "imageModel",
   "theme", "density", "font", "textSize", "checkUpdates"];
 async function handle(m) {
   const it = m.id ? byId(m.id) : null;
@@ -1501,7 +1655,7 @@ async function handle(m) {
       settings[m.k] = m.v;
       write("settings", settings);
       if (m.k === "vintedSite") { settings.vintedOk = false; vwv = null; vCache = null; push(); await vintedCheck(); return push(); }
-      if (["ai", "aiClean", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
+      if (["ai", "aiClean", "aiSpecs", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
       return;
     case "cfg": {
       if (m.k === "*") settings.cfg = {}; else setCfg(m.k, m.v);
@@ -1516,6 +1670,11 @@ async function handle(m) {
     case "openurl":   // Settings › Built with: only the blueprints repository opens from here
       if (m.v === BLUEPRINTS_REPO || String(m.v).startsWith(BLUEPRINTS_REPO + "/")) await Safari.openInApp(m.v, false);
       return;
+    case "specsrc": {   // a source of the technical details: only links the lookup itself returned, opened in Safari
+      const u = String(m.v || "");
+      if (it && it.specs && (it.specs.sources || []).some(s => s.url === u) && /^https:\/\//.test(u)) await Safari.openInApp(u, false);
+      return;
+    }
     case "aiinvite": aiInviteNote(m.v); return;   // AI invitation: shown, open, later or never
     case "aikey": {
       const p = PROVIDERS[m.v] ? m.v : settings.aiProvider;
@@ -1697,6 +1856,17 @@ async function handle(m) {
       L.brandId = m.bid ? +m.bid : null; L.brandTitle = clip(m.title || "", 60); L.brandSet = true;
       write("items", items); return push();
     }
+    case "specs": {   // look the technical details up again, on their own
+      if (!it || busy[it.id]) return;
+      if (!aiKey()) return toast("Add a Claude or OpenAI key in Settings › AI settings");
+      if (!it.ai) return toast("Prepare the item first, so ✦ AI knows what it is");
+      const step = stepper(it.id);
+      step("✦ Looking up the technical details", 0.1, it.photos.slice(0, 1).map(p => p.id), "search");
+      try { const S = await lookUpSpecs(it); toast(S.list.length ? `${S.list.length} technical details found` : "No technical details found for this item"); track("specs_found", { specs: S.list.length, via: S.via, match: S.match }); }
+      catch (e) { toast(String(e.message || e)); }
+      delete busy[it.id]; write("items", items); return push();
+    }
+    case "specsadd": if (it && it.specs) { addSpecsToDescription(it); write("items", items); push(); toast("Added at the end of the description"); } return;
     case "delitem": if (it) { removeItemFiles(it.id); items = items.filter(x => x !== it); write("items", items); push(); saveWidget(widgetSnapshot()); } return;
   }
 }
@@ -1729,7 +1899,7 @@ function clientApp() {
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const PN = { anthropic: "Claude", openai: "OpenAI" };
-  const FEAT = { listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", test: "Connection tests", other: "Other" };
+  const FEAT = { listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", specs: "Technical details (web)", test: "Connection tests", other: "Other" };
   const byId = id => S.items.find(x => x.id === id);
 
   // ---- appearance (app-blueprints · settings, Step 3) ----
@@ -2330,7 +2500,7 @@ function clientApp() {
     return parts.join(" · ");
   }
   // ---- a long job: the photo being worked on (with a scan line), what's happening, an animated bar, the steps so far ----
-  const PHASE = { clean: "Cutting out", read: "✦ Reading", match: "Matching on Vinted", upload: "Uploading" };
+  const PHASE = { clean: "Cutting out", read: "✦ Reading", search: "✦ Searching", match: "Matching on Vinted", upload: "Uploading" };
   const busyPhotos = (b, x) => (b.ph || []).map(id => x && x.photos.find(p => p.id === id)).filter(p => p && thumb(p));
   function bbPhHTML(b, x) {
     const ph = busyPhotos(b, x);
@@ -2367,7 +2537,7 @@ function clientApp() {
   function markScan(b) {
     document.querySelectorAll("#itemsheet .ph[data-p]").forEach(e => {
       const on = !!b && (b.ph || []).includes(e.dataset.p);
-      e.classList.toggle("scan", on); ["clean", "read", "match", "upload"].forEach(k => e.classList.toggle("ph-" + k, on && b.phase === k));
+      e.classList.toggle("scan", on); ["clean", "read", "search", "match", "upload"].forEach(k => e.classList.toggle("ph-" + k, on && b.phase === k));
     });
   }
   // A refused request, in full: Vinted's headline, each problem by field, what it sent back, and a copy button
@@ -2406,6 +2576,18 @@ function clientApp() {
         return g + `<option value="${o.id}" ${sel.includes(o.id) ? "selected" : ""}>${esc(o.title)}</option>`;
       }).join("")}${lastG ? "</optgroup>" : ""}</select></label>`;
   }
+  // The technical details found for the item: where they came from, and whether they're in the description
+  function specsHTML(x) {
+    const T = x.specs;
+    if (!S.settings.hasKey || !x.ai) return "";
+    if (!T) return `<button class="link small block" data-act="specs" ${x.busy ? "disabled" : ""}>✦ Look up the technical details</button>`;
+    const via = T.via === "web" ? "from the web" : T.via === "record" ? "from a product database" : "from the item's own labels";
+    return `<div class="specs"><div class="sp-h"><span class="badge-ai">✦ Technical details by ${esc(T.by)}</span><small class="muted">${via}${T.product ? " · " + esc(T.product) : ""}${T.match === "similar" ? " · similar model" : ""}</small></div>
+      ${T.list.length ? `<dl>${T.list.map(s => `<dt>${esc(s.label)}</dt><dd>${esc(s.value)}</dd>`).join("")}</dl>` : `<p class="muted small">Nothing reliable was found for this exact item.</p>`}
+      ${(T.sources || []).length ? `<p class="sp-src">Sources: ${T.sources.map(s => `<button class="link small" data-act="specsrc" data-v="${esc(s.url)}">${esc(s.title)}</button>`).join(" · ")}</p>` : ""}
+      <div class="sp-btns">${T.list.length && !x.specsIn ? `<button class="sm primary" data-act="specsadd">Add to the description</button>` : T.list.length ? `<small class="muted">✓ At the end of the description</small>` : ""}
+        <button class="sm" data-act="specs" ${x.busy ? "disabled" : ""}>Look up again</button></div></div>`;
+  }
   function fieldsHTML(x) {
     const L = x.listing || {}, O = x.opts, cond = (O.attrs || []).find(a => a.code === "condition");
     const condOpts = cond ? cond.options : S.conditions.map(c => ({ id: c.id, title: c.en }));
@@ -2419,6 +2601,7 @@ function clientApp() {
     return `
       <label class="fl"><span>Title <small class="muted">${(L.title || "").length}/100</small></span><input class="fin" data-k="title" value="${esc(L.title || "")}" maxlength="100" placeholder="What it is, brand, a key detail"></label>
       <label class="fl"><span>Description</span><textarea class="fin" data-k="description" rows="9" placeholder="What it is, its condition, what's included">${esc(L.description || "")}</textarea></label>
+      ${specsHTML(x)}
       <label class="fl"><span>Price</span><div class="pricebox"><input class="fin" data-k="price" value="${L.price || ""}" inputmode="decimal" placeholder="0"><b>${esc(S.vinted.cur)}</b></div>
         ${priceNote(x) ? `<small class="note">${esc(priceNote(x))}</small>` : ""}${x.ai && x.ai.priceWhy ? `<small class="note">✦ ${esc(x.ai.priceWhy)}</small>` : ""}</label>
       <div class="fl"><span>Category</span><div class="fld"><div class="grow"><b>${leaf ? esc(leaf) : `<span class="muted">Not chosen</span>`}</b>${L.catalogPath ? `<small class="muted">${esc(L.catalogPath)}</small>` : ""}</div>
@@ -2446,7 +2629,7 @@ function clientApp() {
       ${posted2 ? `<div class="banner ok"><b>${x.vinted.draft ? "Saved as a draft on Vinted" : "On Vinted"} · ${rel(x.vinted.at)}</b><button class="sm primary" data-act="openvinted" data-v="${esc(x.vinted.url)}">${x.vinted.draft ? "Finish it on Vinted" : "Open on Vinted"}</button></div>` : `
       <label class="fl"><span>Anything AI should know? <small class="muted">optional</small></span><textarea class="fin" data-k="notes" rows="2" placeholder="e.g. works fine, the stick is missing, age 3+">${esc(x.notes)}</textarea></label>
       ${S.settings.hasKey ? `<button class="primary wide ai" data-act="prepare" ${x.busy ? "disabled" : ""}>✦ ${x.ai ? "Prepare again" : "Prepare with AI"}</button>
-        <small class="note center">${S.settings.canClean ? "Cleans the photos, then " : ""}reads the photos, writes the listing and fills Vinted's fields${x.ai ? ". Fields you changed are kept" : ""}.</small>`
+        <small class="note center">${S.settings.canClean ? "Cleans the photos, then " : ""}reads the photos, writes the listing${S.settings.aiSpecs ? ", looks up its technical details" : ""} and fills Vinted's fields${x.ai ? ". Fields you changed are kept" : ""}.</small>`
         : `<button class="sm wide" data-act="fill" ${x.busy || !S.vinted.ok ? "disabled" : ""}>Load Vinted's fields</button><small class="note center"><span class="badge-ex">no AI</span> Fill in the listing yourself, or add a key in Settings › AI settings.</small>`}
       ${S.settings.canClean && x.photos.some(p => p.clean) && !x.busy ? `<button class="link small block" data-act="reclean">Clean the photos again</button>` : ""}`}
       <div id="itembusy">${x.busy ? busyHTML(x.busy, x) : ""}</div>
@@ -2569,7 +2752,7 @@ function clientApp() {
     const max = Math.max(1, ...days.map(tot)), month = S.ai.today.slice(0, 7);
     const monthTot = Object.entries(P.days).filter(([k]) => k.startsWith(month)).reduce((n, [, x]) => n + x.in + x.out, 0);
     const rows = (obj, label) => Object.entries(obj).sort((x, y) => (y[1].in + y[1].out) - (x[1].in + x[1].out))
-      .map(([k, x]) => `<tr><td>${esc(label(k))}</td><td>${x.calls}</td><td>${fmtN(x.in)}</td><td>${fmtN(x.out)}</td></tr>`).join("");
+      .map(([k, x]) => `<tr><td>${esc(label(k))}${x.searches ? `<small class="muted"> · ${x.searches} web search${x.searches === 1 ? "" : "es"}</small>` : ""}</td><td>${x.calls}</td><td>${fmtN(x.in)}</td><td>${fmtN(x.out)}</td></tr>`).join("");
     return `<div class="ucard"><div class="aic-h"><b>${PN[p]}</b><span class="muted small">${P.calls} request${P.calls === 1 ? "" : "s"}</span></div>
       <div class="ustat"><div><b>${fmtN(P.in + P.out)}</b><small>total tokens</small></div><div><b>${fmtN(P.in)}</b><small>input</small></div><div><b>${fmtN(P.out)}</b><small>output</small></div></div>
       <p class="note">Today ${fmtN(tot(S.ai.today))} tokens — this month ${fmtN(monthTot)} tokens</p>
@@ -2606,6 +2789,8 @@ function clientApp() {
       <h3 class="sec">What AI does</h3>
       <div class="srow"><div class="grow"><b>Sort new photos into items</b><small class="muted">When you add several photos at once; one request per batch. Off: they become one item, and you sort them.</small></div>
         <button class="switch ${S.settings.ai ? "on" : ""}" data-act="toggle" data-v="ai" aria-label="Sort new photos into items"></button></div>
+      <div class="srow"><div class="grow"><b>Look up technical details on the web</b><small class="muted">Dimensions, weight, materials and specs for the exact product, added at the end of the description. Uses your provider's web search (a few searches per item, billed by the provider on top of tokens); a barcode or ISBN on the item is looked up in free product databases first.</small></div>
+        <button class="switch ${S.settings.aiSpecs ? "on" : ""}" data-act="toggle" data-v="aiSpecs" aria-label="Look up technical details on the web"></button></div>
       <div class="srow"><div class="grow"><b>Clean photo backgrounds</b><small class="muted">${A.hasOpenAI ? "One OpenAI image request per photo, when you prepare an item." : "Needs an OpenAI key, even when Claude writes the listings."} The style is in Settings › Photos.</small></div>
         <button class="switch ${S.settings.aiClean ? "on" : ""}" data-act="toggle" data-v="aiClean" aria-label="Clean photo backgrounds"></button></div>
       ${A.hasOpenAI ? `<label class="aic-row lbl" for="imgsel">Image model</label><select id="imgsel" class="modelsel">${imOpts.map(m => `<option value="${esc(m.id)}" ${m.id === A.imageModel ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select>
@@ -2670,6 +2855,9 @@ function clientApp() {
       case "delitem": if (armed === "del" + openId) { armed = null; const id = openId; openId = null; send("delitem", { id }); renderItem(); } else arm2("del" + openId, renderItem); break;
       case "openvinted": send("openvinted", { v }); break;
       case "copyerr": send("copyerr", { id: openId }); break;
+      case "specs": send("specs", { id: openId }); break;
+      case "specsadd": send("specsadd", { id: openId }); break;
+      case "specsrc": send("specsrc", { id: openId, v }); break;
       case "toerr": { const eb = $("#itemsheet .errbox"); if (eb) eb.scrollIntoView({ block: "center", behavior: "smooth" }); break; }
       case "acctrefresh": send("acctrefresh", { v }); break;
       case "vopen": vOpen = +v; armed = null; renderVItem(); $("#vsheet").scrollTop = 0; break;
@@ -3001,6 +3189,14 @@ textarea.fin{resize:vertical}
 .scanl{display:none;position:absolute;left:0;right:0;top:0;height:34%;pointer-events:none;background:linear-gradient(180deg,rgba(45,212,191,0),rgba(45,212,191,.55) 70%,#5EEAD4 72%,rgba(45,212,191,0) 74%);animation:scanY 1.4s cubic-bezier(.45,0,.55,1) infinite alternate}
 .bb-ph .scanl{display:block}
 .bb-ph.read .scanl,.ph.ph-read .scanl{background:linear-gradient(180deg,rgba(251,191,36,0),rgba(251,191,36,.5) 70%,#FDE68A 72%,rgba(251,191,36,0) 74%)}
+.bb-ph.search .scanl,.ph.ph-search .scanl{background:linear-gradient(180deg,rgba(167,139,250,0),rgba(167,139,250,.55) 70%,#DDD6FE 72%,rgba(167,139,250,0) 74%)}
+.ph.ph-search img{box-shadow:0 0 0 2px #A78BFA,0 0 18px rgba(167,139,250,.5)}
+.specs{margin:-4px 0 14px;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:12px}
+.sp-h{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.specs dl{display:grid;grid-template-columns:minmax(90px,40%) 1fr;gap:5px 12px;margin:0;font-size:calc(14px * var(--ts))}
+.specs dt{color:var(--muted)} .specs dd{margin:0;color:var(--ink)}
+.sp-src{margin:10px 0 0;font-size:calc(12px * var(--ts));color:var(--muted)}
+.sp-btns{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px}
 .bb-ph.upload .scanl,.ph.ph-upload .scanl{animation:scanUp 1s linear infinite;background:linear-gradient(0deg,rgba(96,165,250,0),rgba(96,165,250,.55) 70%,#BFDBFE 72%,rgba(96,165,250,0) 74%)}
 .ph .scanl{height:52px;top:0;border-radius:12px 12px 0 0}
 .ph.scan .scanl{display:block;animation-name:scanPh}
