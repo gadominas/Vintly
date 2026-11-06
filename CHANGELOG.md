@@ -2,6 +2,19 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.4.1 (2026-11-07): Ready for the App Store
+
+- 📱 **Ready for the App Store**: Built as an app of its own, Vintly gets new versions from the App Store instead of downloading them.
+- ✅ **Checked on every change**: Every change now runs the shared app tests: start-up, widget, updates and usage counts.
+- 👆 **Buttons that work everywhere**: Every button in Vintly works the same in Scriptable and as an app of its own.
+
+**Changes**
+
+- In-app updates 1.1.0: in a native shell (BuildIt) there is no update check or installer, and Settings › Updates says new versions come through the App Store
+- Portable bridge recipe: the page hands its messages to window.__hostBridge when a native shell provides one
+- Testing recipe: the app-blueprints testkit (lint and five conformance packs) runs on every push (.github/workflows/tests.yml)
+- Blueprint trace: Stability patterns 1.0.1, AI configuration 1.0.1, Launch screen 1.0.1, Widgets 1.1.1
+
 ## 1.4.0 (2026-11-06): Every detail, looked up
 
 - 🔎 **Technical details from the web**: ✦ AI finds the exact product online: dimensions, weight, materials and specs.
