@@ -2,6 +2,18 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.0.1 (2026-11-06): Signed in, for real
+
+- 🔑 **Vinted sign-in works**: After you sign in, Vintly sees it straight away and loads Vinted's fields.
+- ✦ **Prepare with AI works**: Cleaning photos and filling the listing no longer stop with a JavaScript error.
+- 💬 **Clearer messages**: If Vinted can't be reached, Vintly says why instead of just “not signed in”.
+
+**Changes**
+
+- Fixed: every request to Vinted and every photo cleanup failed on iPhone with “JavaScript execution returned a result of an unsupported type”
+- Fixed: Vintly said “Not signed in” after a successful sign-in; the check now runs in the page you signed in with
+- The sign-in and Check messages say what went wrong when the check itself fails
+
 ## 1.0.0 (2026-11-06): Snap it, list it
 
 - 📸 **Photos to listings**: Take a few photos of each thing; ✦ AI sorts them and writes every listing.

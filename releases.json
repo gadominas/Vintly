@@ -4,13 +4,52 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.0.1",
+      "date": "2026-11-06",
+      "title": "Signed in, for real",
+      "highlights": [
+        {
+          "icon": "🔑",
+          "title": "Vinted sign-in works",
+          "text": "After you sign in, Vintly sees it straight away and loads Vinted's fields."
+        },
+        {
+          "icon": "✦",
+          "title": "Prepare with AI works",
+          "text": "Cleaning photos and filling the listing no longer stop with a JavaScript error."
+        },
+        {
+          "icon": "💬",
+          "title": "Clearer messages",
+          "text": "If Vinted can't be reached, Vintly says why instead of just “not signed in”."
+        }
+      ],
+      "changes": [
+        "Fixed: every request to Vinted and every photo cleanup failed on iPhone with “JavaScript execution returned a result of an unsupported type”",
+        "Fixed: Vintly said “Not signed in” after a successful sign-in; the check now runs in the page you signed in with",
+        "The sign-in and Check messages say what went wrong when the check itself fails"
+      ]
+    },
+    {
       "version": "1.0.0",
       "date": "2026-11-06",
       "title": "Snap it, list it",
       "highlights": [
-        { "icon": "📸", "title": "Photos to listings", "text": "Take a few photos of each thing; ✦ AI sorts them and writes every listing." },
-        { "icon": "🪄", "title": "Clean backgrounds", "text": "The background goes and your item keeps its own pixels, on white." },
-        { "icon": "🏷️", "title": "Posted in one tap", "text": "Vinted's own fields are filled in; check them, then post or save a draft." }
+        {
+          "icon": "📸",
+          "title": "Photos to listings",
+          "text": "Take a few photos of each thing; ✦ AI sorts them and writes every listing."
+        },
+        {
+          "icon": "🪄",
+          "title": "Clean backgrounds",
+          "text": "The background goes and your item keeps its own pixels, on white."
+        },
+        {
+          "icon": "🏷️",
+          "title": "Posted in one tap",
+          "text": "Vinted's own fields are filled in; check them, then post or save a draft."
+        }
       ],
       "changes": [
         "Take photos or choose them (or share them to Vintly from Photos); several items at once",
