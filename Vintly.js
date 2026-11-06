@@ -29,9 +29,12 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
+const REPO_URL = 'https://github.com/gadominas/Vintly';
+// The QR code on posted photos: REPO_URL (error correction M), side:hex modules row by row, made once with the qrcode package.
+const QR_VINTLY = '29:fe49fbfc12c2106ea4a2bb75a085dbaaf7aec14bc507faaaafe017a000be62c3e72987dc69f64a21708730a8e1840600ef7fc599fd338416b7f2fe4bd5640185bd699c4ae900551c2bbd85fb8047447ff85feb905ea311ba8a6fb5d4a7c3eeaad7fd04c11aafec593a0';
 const SCRIPT_FILE = 'Vintly.js';   // the script's file name in the repository
 const UPDATE_SNOOZE_MS = 2 * 24 * 3600 * 1000;   // "Later" = 2 days
 const KC_UPDATE_SNOOZE = 'vintly-update-snooze';   // Keychain key, unique per app
@@ -116,6 +119,7 @@ const CONFIG = [
   ["Vinted", [
     { k: "vintedTimeout", label: "Time limit for Vinted", help: "For one photo upload or posting an item", unit: "s", def: 60, min: 15, max: 180, step: 5 },
     { k: "catalogDays", label: "Reload Vinted's categories every", help: "Categories change rarely; they're kept on this iPhone", unit: "days", def: 7, min: 1, max: 30, step: 1 },
+    { k: "inboxEveryMin", label: "Check messages every", help: "While Vintly is open; they're always checked when it opens", unit: "min", def: 2, min: 1, max: 30, step: 1 },
   ]],
   ["Keeping items", [
     { k: "keepPostedDays", label: "Keep posted items for", help: "Older posted items leave the Posted tab and their photos are deleted", unit: "days", def: 60, min: 7, max: 365, step: 7 },
@@ -249,14 +253,14 @@ const settings = Object.assign(
   { tab: "todo",                                                        // remembered pick: To post or Posted
     vintedSite: "vinted.lt",                                            // Vinted
     lang: "lt", lang2: "en", humour: true, bothTitles: true,            // Listings
-    cleanStyle: "keep", removePhotosAfter: false,                      // Photos: keep (the item's own pixels), studio (AI re-drawn), off
+    cleanStyle: "keep", removePhotosAfter: false, stickers: "all", qrBadge: true,   // stickers: all, kids (kids' items only), off                      // Photos: keep (the item's own pixels), studio (AI re-drawn), off
     ai: true, aiClean: true,                                            // What AI does: sort new photos into items, clean photos
     imageModel: "",                                                     // the OpenAI image model for cleaning ("" = IMAGE_MODEL)
     aiProvider: "anthropic",                                            // AI configuration
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
     shareUsage: false, usageAsked: false,  // anonymous usage counts: off until the person agrees
     theme: "auto", density: "comfortable", font: "sans", textSize: 1,  // Appearance
-    vintedOk: false, vintedAt: 0 },                                     // internal state: last Vinted sign-in check
+    vintedOk: false, vintedAt: 0, vintedUser: null },                                     // internal state: last Vinted sign-in check
   await load("settings", {})
 );
 const settingsOk = !loadIssues.includes("settings");   // settings that were never read are never saved over
@@ -505,6 +509,9 @@ function aiInviteNote(what, now = Date.now()) {
 //   GET  api.<site>/shipping-estimation/external/catalogs/<id>/package_sizes
 //   POST api.<site>/upload-form-suggestions/item_price_suggestions
 //   POST /api/v2/item_upload/items  (or /item_upload/drafts)   { item, push_up, parcel, upload_session_id }
+//   GET  /api/v2/users/current                            you (answers only when you're signed in: the sign-in check)
+//   GET  /api/v2/wardrobe/<user>/items?page&per_page      your listings;  POST /api/v2/items/<id>/delete  removes one
+//   GET  api.<site>/messaging/main/inbox, …/users/unread_count, …/conversations/<id>, POST …/conversations/<id>/replies
 // Headers: X-CSRF-Token (a constant in the site's own scripts, read from them) and X-Anon-Id (the anon_id cookie).
 const vBase = () => "https://www." + siteOf();
 const vApiHost = () => "https://api." + siteOf();
@@ -587,15 +594,20 @@ const vErr = (a, what) => {
 };
 const vSignedOut = a => a && (a.status === 401 || a.status === 403);
 
-// Are you signed in to Vinted here? A form endpoint answers only when you are; its answer (the colours) is kept.
+// Are you signed in to Vinted here? /users/current answers only when you are (the colours answer anyone, so they
+// can't tell). Your Vinted id is kept for your listings; the colours are kept for the form.
 async function vintedCheck() {
   try {
-    const a = await vjs(`return await window.__vt.api("/item_upload/colors");`, 40000);
-    settings.vintedOk = a.status === 200;
-    if (a.status === 200 && a.j && Array.isArray(a.j.colors)) {
-      const c = vCacheGet(); c.colors = a.j.colors.map(x => ({ id: x.id, title: x.title, hex: x.hex, code: x.code })); vCacheSave();
+    const a = await vjs(`const me = await window.__vt.api("/users/current");
+      const u = me.j && (me.j.user || me.j);
+      const col = me.status === 200 ? await window.__vt.api("/item_upload/colors") : null;
+      return { status: me.status, t: me.t, id: u && u.id || null, login: u && (u.login || u.login_name) || "", colors: col && col.j && col.j.colors || null };`, 40000);
+    settings.vintedOk = a.status === 200 && !!a.id;
+    if (settings.vintedOk) settings.vintedUser = { id: a.id, login: a.login };
+    if (Array.isArray(a.colors)) {
+      const c = vCacheGet(); c.colors = a.colors.map(x => ({ id: x.id, title: x.title, hex: x.hex, code: x.code })); vCacheSave();
     }
-    vintedCheck.why = settings.vintedOk || a.status === 401 ? "" : `Vinted answered HTTP ${a.status}${a.t && /captcha|datadome|blocked/i.test(a.t) ? " (a robot check)" : ""}`;
+    vintedCheck.why = settings.vintedOk || [401, 403].includes(a.status) ? "" : `Vinted answered HTTP ${a.status}${a.t && /captcha|datadome|blocked/i.test(a.t) ? " (a robot check)" : ""}`;
     if (!settings.vintedOk) startLog(`Vinted: signed out (HTTP ${a.status})`);
   } catch (e) { settings.vintedOk = false; vintedCheck.why = String(e.message || e); startLog("Vinted check failed: " + vintedCheck.why); }
   settings.vintedAt = Date.now();
@@ -724,7 +736,7 @@ async function vPost(it, asDraft, onStep) {
   for (let i = 0; i < photos.length; i++) {
     onStep(`Uploading photo ${i + 1} of ${photos.length}`, (i + 0.2) / (photos.length + 1));
     const ph = photos[i];
-    const b64 = await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : ""));
+    const b64 = await decorate(await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : "")), it, i);
     const up = await vUpload(b64, sessionId);
     assigned.push({ id: up.id, orientation: 0 });
   }
@@ -747,6 +759,109 @@ async function vPost(it, asDraft, onStep) {
   if (a.status < 200 || a.status > 299 || !a.j || (a.j.code && a.j.code !== 0)) throw vErr(a, asDraft ? "Vinted didn't save the draft" : "Vinted didn't take the item");
   const id = (a.j.item && a.j.item.id) || (a.j.draft && a.j.draft.id) || a.j.id || null;
   return { id, url: id ? vBase() + "/items/" + id + (asDraft ? "/edit" : "") : vBase() + "/member/items" };
+}
+
+// ---------- Your Vinted account: your listings (with delete) and your messages ----------
+// Read through the same hidden Vinted page as the Sell form. What's read is kept on this iPhone only (the local cache
+// file), so the lists show at once on the next open and the widget can show the unread count.
+const vEdge = path => vApiHost() + "/messaging/main" + path;
+// Vinted sends times as seconds, milliseconds or ISO text: always milliseconds back.
+const vTime = v => { if (v == null || v === "") return 0; if (typeof v === "number") return v < 1e12 ? v * 1000 : v; const n = Date.parse(v); return isFinite(n) ? n : 0; };
+const vAccount = () => { const c = vCacheGet(); c.acct = c.acct || {}; return c.acct; };
+
+// Your listings on Vinted, newest first (every page, up to 480). Sold and hidden ones are marked.
+async function vWardrobe() {
+  const me = settings.vintedUser && settings.vintedUser.id;
+  if (!me) throw new Error("Sign in to Vinted first (Settings › Vinted).");
+  const r = await vjs(`const out = []; let page = 1, pages = 1, status = 200, t = "";
+    while (page <= pages && page <= 5) {
+      const a = await window.__vt.api("/wardrobe/${+me}/items?page=" + page + "&per_page=96&order=newest_first");
+      status = a.status; t = a.t;
+      if (a.status !== 200 || !a.j) break;
+      for (const x of a.j.items || []) {
+        const ph = (x.photos || [])[0] || x.photo || {}, th = (ph.thumbnails || []).find(k => k.type === "thumb310x430") || {};
+        out.push({ id: x.id, title: x.title || "", price: +((x.price && x.price.amount) || x.price || 0), cur: (x.price && x.price.currency_code) || x.currency || "",
+          photo: th.url || ph.url || "", url: x.url || "", views: x.view_count || 0, favs: x.favourite_count || 0,
+          sold: !!x.is_closed, reserved: !!x.is_reserved, hidden: !!x.is_hidden, draft: !!x.is_draft, status: x.status || "" });
+      }
+      pages = (a.j.pagination && a.j.pagination.total_pages) || 1; page++;
+    }
+    return { status, t, items: out };`, 60000);
+  if (r.status !== 200) { if (vSignedOut(r)) settings.vintedOk = false; throw vErr(r, "Your Vinted listings"); }
+  const A = vAccount(); A.wardrobe = r.items; A.wardrobeAt = Date.now(); vCacheSave();
+  return r.items;
+}
+
+// Deletes a listing on Vinted for good, the way the site's own Delete does.
+async function vDeleteItem(id) {
+  const a = await vjs(`return await window.__vt.api("/items/${+id}/delete", { method: "POST" });`, 30000);
+  if (a.status !== 200 && a.status !== 204) throw vErr(a, "Deleting it on Vinted");
+  const A = vAccount(); A.wardrobe = (A.wardrobe || []).filter(x => x.id !== +id); vCacheSave();
+  items.filter(x => x.vinted && +x.vinted.id === +id).forEach(x => { x.vinted.deleted = Date.now(); });
+  return true;
+}
+
+// Your conversations, newest first, and how many messages wait unread.
+async function vInbox() {
+  const r = await vjs(`const a = await window.__vt.api(${JSON.stringify(vEdge("/inbox?page=1&per_page=20"))});
+    if (a.status !== 200 || !a.j) return { status: a.status, t: a.t };
+    const u = await window.__vt.api(${JSON.stringify(vEdge("/users/unread_count"))});
+    const pick = (...v) => v.find(x => x != null && x !== "");
+    const list = (a.j.conversations || a.j.data || []).map(c => {
+      const d = c.data || {}, ou = ((c.opposite_users || [])[0] || c.opposite_user || {}), od = ou.data || ou;
+      const it = (d.inventory_items || c.items || [])[0] || {}, lm = c.last_message || {}, ld = lm.data || lm;
+      const ph = pick(it.photo && it.photo.url, it.photo_url, (it.photos || [])[0] && it.photos[0].url, (c.item_photos || [])[0] && c.item_photos[0].url, "");
+      const av = pick(od.photo && od.photo.url, od.photo_url, od.avatar && od.avatar.url, "");
+      return { id: String(c.id), unread: !!pick(c.is_unread_by_current_user, c.unread, c.is_unread, false), who: pick(od.login_name, od.login, od.name, "Someone"),
+        avatar: av, item: pick(it.title, d.subject, c.description, ""), photo: ph,
+        last: String(pick(ld.content, ld.body, (ld.entity || {}).content, c.description, "")).slice(0, 300),
+        at: pick(lm.created_at_ts, ld.created_at_ts, ld.created_at, c.updated_at_ts, c.updated_at, c.created_at, 0) };
+    });
+    const uj = u.j || {}, un = pick(uj.count, uj.unread_count, uj.unread_messages_count, uj.unread_msg_count, uj.data && uj.data.count, typeof uj === "number" ? uj : null);
+    return { status: 200, list, unread: un != null ? +un : null };`, 40000);
+  if (r.status !== 200) { if (vSignedOut(r)) settings.vintedOk = false; throw vErr(r, "Your Vinted messages"); }
+  const A = vAccount();
+  A.convs = r.list.map(c => Object.assign(c, { at: vTime(c.at) }));
+  A.unread = r.unread != null && isFinite(r.unread) ? r.unread : A.convs.filter(c => c.unread).length;
+  A.inboxAt = Date.now(); vCacheSave();
+  return A;
+}
+
+// One conversation: its messages, oldest first, yours marked; it's marked as read on Vinted when you open it.
+async function vConversation(id) {
+  const me = settings.vintedUser && settings.vintedUser.id;
+  const r = await vjs(`const a = await window.__vt.api(${JSON.stringify(vEdge("/conversations/" + encodeURIComponent(id)))});
+    if (a.status !== 200 || !a.j) return { status: a.status, t: a.t };
+    const pick = (...v) => v.find(x => x != null && x !== "");
+    const root = a.j.conversation || a.j, msgs = root.messages || (root.data && root.data.messages) || [];
+    const list = msgs.map(m => {
+      const d = m.data || m, e = d.entity || m.entity || {}, type = pick(d.entity_type, m.entity_type, "message");
+      const price = e.price && (e.price.amount + " " + (e.price.currency_code || ""));
+      let text = pick(e.content, e.body, d.content, d.body, m.content, m.body, "");
+      if (!text && price) text = (type === "offer_request_message" ? "Offer request: " : "Offer: ") + price + (e.status_title ? " · " + e.status_title : "");
+      if (!text) text = pick(e.title, d.title, e.status_title, "(" + type.replace(/_/g, " ") + ")");
+      const by = pick(e.user_id, d.user_id, m.user_id, m.sender_id, m.sender && m.sender.id, null);
+      const mine = pick(m.is_current_user, d.is_current_user, e.is_current_user, m.is_own, by != null ? String(by) === ${JSON.stringify(String(me || ""))} : null, false);
+      return { id: String(pick(d.id, m.id, e.id, Math.random())), text: String(text), mine: !!mine, at: pick(d.created_at_ts, m.created_at_ts, e.created_at_ts, d.created_at, m.created_at, 0), type };
+    });
+    const ou = ((root.opposite_users || [])[0] || root.opposite_user || {}), od = ou.data || ou, dd = root.data || {};
+    const it = (dd.inventory_items || root.items || [])[0] || {};
+    try { await window.__vt.api(${JSON.stringify(vEdge("/conversations/" + encodeURIComponent(id) + "/mark_as_read"))}, { method: "POST" }); } catch (e) {}
+    return { status: 200, list, who: pick(od.login_name, od.login, ""), item: pick(it.title, dd.subject, ""), itemId: it.id || null };`, 40000);
+  if (r.status !== 200) throw vErr(r, "This conversation");
+  const A = vAccount(), c = (A.convs || []).find(x => x.id === String(id));
+  if (c && c.unread) { c.unread = false; A.unread = Math.max(0, (A.unread || 1) - 1); vCacheSave(); }
+  return { id: String(id), who: r.who || (c && c.who) || "", item: r.item || (c && c.item) || "", msgs: r.list.map(m => Object.assign(m, { at: vTime(m.at) })).sort((a, b) => a.at - b.at) };
+}
+
+// Sends your reply. Vinted may refuse a message that looks like it shares personal details: say so, and let you send anyway.
+async function vReply(id, text, anyway) {
+  const body = { content: String(text).slice(0, 2000), is_personal_data_sharing_check_skipped: !!anyway, photo_temp_uuids: null };
+  const a = await vjs(`return await window.__vt.api(${JSON.stringify(vEdge("/conversations/" + encodeURIComponent(id) + "/replies"))}, { method: "POST", body: ${JSON.stringify(body)} });`, 30000);
+  if (a.status === 200 || a.status === 201) return { ok: true };
+  const j = a.j || {}, msg = j.message || (j.errors && j.errors.map(e => e.value || e.field).join("; ")) || "";
+  if (/personal|asmenin|contact|kontakt/i.test(msg + " " + (j.message_code || ""))) return { ok: false, personal: true, msg: msg || "Vinted thinks this shares personal details." };
+  throw vErr(a, "Sending your reply");
 }
 
 // ---------- photos ----------
@@ -884,8 +999,28 @@ function finishBatch(groups) {
 // ---------- ✦ cleaning photos ----------
 // "keep": the image model draws a black-and-white outline of the item; Vintly cuts the ORIGINAL photo along it on a
 // white ground, so the item keeps its own pixels. "studio": the model redraws the photo on white (marked as AI).
+// Kid-catching stickers and Vintly's QR code, drawn on the copies sent to Vinted; your own photos stay as they are.
+const KIDS_RX = /vaik|kūdik|žaisl|kid|child|baby|toy|enfant|bébé|jouet|kinder|baby|spielzeug|dzieci|niemowl|zabawk|bambin|giocattol|niñ|bebé|juguet/i;
+function decorFor(it) {
+  const st = settings.stickers || "all", kids = KIDS_RX.test(((it && it.listing) || {}).catalogPath || "");
+  return { stickers: st === "all" || (st === "kids" && kids), qr: settings.qrBadge !== false, kids };
+}
+const seedOf = s => { let h = 7; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+async function decorate(b64, it, i) {
+  const d = decorFor(it);
+  if (!d.stickers && !(d.qr && i === 0)) return b64;
+  try {
+    const r = await evc(`window.__decorate(${safeJSON(b64)}, ${safeJSON({ stickers: d.stickers, qr: d.qr && i === 0, seed: seedOf(it.id) + i, max: cfg("photoMax") })})`, 30000);
+    if (r && r.b64) return r.b64;
+    startLog("decorate: " + ((r && r.error) || "no answer"));
+  } catch (e) { startLog("decorate: " + (e.message || e)); }
+  return b64;   // a decoration that failed never stops the post
+}
+
 const MASK_PROMPT = "Make a precise black-and-white cut-out mask of this photo. The single item for sale (the main object in the " +
-  "foreground, with every part that belongs to it: handles, strings, straps, lids, wheels, legs) must be solid pure white (#FFFFFF). " +
+  "foreground, with every part that belongs to it: handles, strings, straps, lids, wheels, legs) must be solid pure white (#FFFFFF), " +
+  "and so must everything inside its outline: screens, glass, dark or shiny parts, buttons, labels, prints and pictures on it, " +
+  "transparent parts and anything lying in or on it. Never leave black holes inside the item. " +
   "Absolutely everything else must be solid pure black (#000000): the table or floor, walls, background, shadows, reflections, " +
   "other objects, hands and the grey bars at the edges. Keep exactly the same framing, position, scale and outline as the input: " +
   "the white shape must lie exactly over the item. No grey, no gradients, no text, no outlines, no new objects.";
@@ -1111,7 +1246,8 @@ async function postItem(id, asDraft) {
     it.vinted = { id: r.id, url: r.url, at: Date.now(), draft: !!asDraft };
     it.status = "posted";
     it.cover = thumbURL(it.id, it.photos[0].id, it.photos[0].use === "clean" && it.photos[0].clean ? "ct" : "t");
-    track("item_posted", { photos: it.photos.length, mode: asDraft ? "draft" : "post", cleaned: it.photos.filter(p => p.use === "clean" && p.clean).length });
+    const dec = decorFor(it);
+    track("item_posted", { photos: it.photos.length, mode: asDraft ? "draft" : "post", cleaned: it.photos.filter(p => p.use === "clean" && p.clean).length, decor: dec.stickers ? (dec.qr ? "both" : "stickers") : dec.qr ? "qr" : "none" });
     if (settings.removePhotosAfter) { removeItemFiles(it.id); it.photos = it.photos.map(p => ({ id: p.id, w: p.w, h: p.h, gone: true })); }
     toast(asDraft ? "Saved as a draft on Vinted" : "Posted on Vinted 🎉");
   } catch (e) { it.err = clip(e.message || e, 240); startLog("post: " + it.err); }
@@ -1206,12 +1342,36 @@ function itemView(it) {
     missing: missingFor(it), busy: busy[it.id] || null,
   };
 }
+// Your Vinted account for the page: listings, conversations, the open conversation and what's loading.
+let openConv = null;
+const vLoading = { wardrobe: false, inbox: false, conv: false, sending: false, del: 0 };
+function vtView() {
+  const A = vAccount();
+  return { me: settings.vintedUser || null, wardrobe: A.wardrobe || null, wardrobeAt: A.wardrobeAt || 0, convs: A.convs || null, unread: A.unread || 0,
+    inboxAt: A.inboxAt || 0, conv: openConv, loading: Object.assign({}, vLoading) };
+}
+// Refreshes the inbox (and, with all, your listings); quiet: a failure is only logged unless you asked.
+async function refreshAccount(all, loud) {
+  if (!settings.vintedOk) { if (loud) toast(`Sign in to ${siteOf()} first`); return; }
+  vLoading.inbox = true; if (all) vLoading.wardrobe = true; push();
+  try {   // a toast only for messages that came since the last check (the tab and the widget always show the count)
+    const was = vAccount(), before = was.unread || 0, seen = !!was.inboxAt, A = await vInbox();
+    if (seen && A.unread > before && !loud) toast(`💬 ${A.unread} unread message${A.unread === 1 ? "" : "s"} on Vinted`);
+  }
+  catch (e) { startLog("inbox: " + (e.message || e)); if (loud) toast(String(e.message || e)); }
+  vLoading.inbox = false;
+  if (all) { try { await vWardrobe(); } catch (e) { startLog("wardrobe: " + (e.message || e)); if (loud) toast(String(e.message || e)); } vLoading.wardrobe = false; }
+  push();
+  saveWidget(widgetSnapshot());
+}
+
 function clientState() {
   return {
     items: items.map(itemView),
     batch: batch ? { photos: batch.photos.map(p => ({ id: p.id, t: thumbURL(BATCH, p.id, "t") })), groups: batch.groups, names: batch.names, sorting: !!batch.sorting, by: batch.by || "" } : null,
     colors: vCacheGet().colors || [], conditions: CONDITIONS,
     vinted: { ok: !!settings.vintedOk, at: settings.vintedAt || 0, site: siteOf(), cur: currencyOf(), base: vBase() },
+    vt: vtView(),
     sites: Object.entries(VINTED_SITES).map(([k, v]) => [k, v[0], v[1]]), langs: LANGS,
     ai: {
       provider: settings.aiProvider,
@@ -1224,7 +1384,7 @@ function clientState() {
     cfgSchema: CONFIG.map(([title, items]) => ({ title, items })),
     settings: {
       tab: settings.tab, vintedSite: siteOf(), lang: settings.lang, lang2: settings.lang2, humour: settings.humour !== false, bothTitles: settings.bothTitles !== false,
-      cleanStyle: settings.cleanStyle || "keep", removePhotosAfter: !!settings.removePhotosAfter,
+      cleanStyle: settings.cleanStyle || "keep", removePhotosAfter: !!settings.removePhotosAfter, stickers: settings.stickers || "all", qrBadge: settings.qrBadge !== false,
       ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
       checkUpdates: settings.checkUpdates !== false, shareUsage: !!settings.shareUsage,
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
@@ -1257,7 +1417,7 @@ async function evcOne(expr, ms) {
   try { return JSON.parse(out || "null"); } catch (e) { return null; }
 }
 
-const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "ai", "aiClean", "imageModel",
+const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "imageModel",
   "theme", "density", "font", "textSize", "checkUpdates"];
 async function handle(m) {
   const it = m.id ? byId(m.id) : null;
@@ -1285,10 +1445,12 @@ async function handle(m) {
       if (m.k === "lang" && !LANGS[m.v]) return;
       if (m.k === "lang2" && m.v && !LANGS[m.v]) return;
       if (m.k === "cleanStyle" && !["keep", "studio", "off"].includes(m.v)) return;
+      if (m.k === "stickers" && !["all", "kids", "off"].includes(m.v)) return;
+      if (m.k === "qrBadge") m.v = m.v === true || m.v === "true";
       settings[m.k] = m.v;
       write("settings", settings);
       if (m.k === "vintedSite") { settings.vintedOk = false; vwv = null; vCache = null; push(); await vintedCheck(); return push(); }
-      if (["ai", "aiClean", "imageModel", "cleanStyle"].includes(m.k)) return push();
+      if (["ai", "aiClean", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
       return;
     case "cfg": {
       if (m.k === "*") settings.cfg = {}; else setCfg(m.k, m.v);
@@ -1341,6 +1503,37 @@ async function handle(m) {
 
     // ── Vinted ──
     case "vsignin": { const ok = await vintedSignIn(); toast(ok ? `Signed in to ${siteOf()}` : vintedCheck.why ? `Couldn't check Vinted: ${vintedCheck.why}` : `Not signed in to ${siteOf()} yet`); return push(); }
+    // Your Vinted account: listings (with delete) and messages
+    case "acctrefresh": return refreshAccount(m.v !== "inbox", true);
+    case "vdel": {
+      const id = +m.v; if (!id || vLoading.del) return;
+      vLoading.del = id; push();
+      try { await vDeleteItem(id); write("items", items); toast("Deleted on Vinted"); track("listing_deleted"); }
+      catch (e) { toast(String(e.message || e)); }
+      vLoading.del = 0; push(); saveWidget(widgetSnapshot());
+      return;
+    }
+    case "conv": {
+      const id = String(m.v || ""); if (!id) return;
+      openConv = { id, msgs: null, who: "", item: "" }; vLoading.conv = true; push();
+      try { openConv = Object.assign(await vConversation(id), { err: "" }); track("conversation_opened"); }
+      catch (e) { openConv = { id, msgs: [], err: String(e.message || e) }; }
+      vLoading.conv = false; push(); saveWidget(widgetSnapshot());
+      return;
+    }
+    case "convclose": openConv = null; return;
+    case "reply": {
+      if (!openConv || openConv.id !== String(m.id) || vLoading.sending) return;
+      const text = String(m.text || "").trim(); if (!text) return;
+      vLoading.sending = true; push();
+      try {
+        const r = await vReply(openConv.id, text, !!m.anyway);
+        if (r.ok) { openConv = Object.assign(await vConversation(openConv.id), { err: "", draft: "" }); track("reply_sent"); }
+        else openConv = Object.assign(openConv, { err: r.msg, personal: true, draft: text });
+      } catch (e) { openConv = Object.assign(openConv, { err: String(e.message || e), draft: text }); }
+      vLoading.sending = false; push();
+      return;
+    }
     case "vcheck": { const ok = await vintedCheck(); toast(ok ? `Signed in to ${siteOf()}` : vintedCheck.why ? `Couldn't check Vinted: ${vintedCheck.why}` : `Not signed in to ${siteOf()}`); return push(); }
     case "openvinted": {
       const u = String(m.v || "");
@@ -1462,7 +1655,8 @@ function buildWebView() {
 function clientApp() {
   let S = window.__INIT;
   const look = { theme: S.settings.theme || "auto", density: S.settings.density || "comfortable", font: S.settings.font || "sans", textSize: +S.settings.textSize || 1 };
-  let tab = S.settings.tab === "posted" ? "posted" : "todo";
+  let tab = ["posted", "msgs"].includes(S.settings.tab) ? S.settings.tab : "todo";
+  let vOpen = null, convOpen = false, replyDraft = "";   // a Vinted listing's sheet, the conversation sheet
   let openId = null, cfgOpen = false, cfgArmed = false, aiOpen = false, aiArmed = null, armed = null, batchOpen = !!S.batch;
   let importTarget = "", tray = 0, importing = 0, panel = null;   // panel: "cat" or "brand", open inside the item sheet
   let catRes = null, brandRes = null, brandQ = "", catQ = "";
@@ -1675,6 +1869,19 @@ function clientApp() {
     }
     return o;
   }
+  function fillHoles(a, w, h) {   // background that can't be reached from the photo's edge is inside the item: it stays
+    const seen = new Uint8Array(w * h), st = new Int32Array(w * h); let n = 0;
+    const push = i => { if (!a[i] && !seen[i]) { seen[i] = 1; st[n++] = i; } };
+    for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+    while (n) {
+      const i = st[--n], x = i % w;
+      if (x > 0) push(i - 1); if (x < w - 1) push(i + 1); if (i >= w) push(i - w); if (i < (h - 1) * w) push(i + w);
+    }
+    let filled = 0;
+    for (let i = 0; i < w * h; i++) if (!a[i] && !seen[i]) { a[i] = 1; filled++; }
+    return filled;
+  }
   function boxBlur(a, w, h, r) {   // a mean filter of radius r (two passes with running sums): 0…1 back
     const t = new Float32Array(w * h), o = new Float32Array(w * h), n = 2 * r + 1;
     for (let y = 0; y < h; y++) {
@@ -1705,6 +1912,7 @@ function clientApp() {
     const px = mx.getImageData(0, 0, mw, mh).data;
     let a = new Uint8Array(mw * mh), on = 0;
     for (let i = 0; i < mw * mh; i++) { const l = px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11; a[i] = l > 128 ? 1 : 0; on += a[i]; }
+    on += fillHoles(a, mw, mh);   // a screen, a print or a dark part inside the outline is part of the item
     const cover = on / (mw * mh);
     if (cover < 0.01) throw new Error("The item wasn't found in the photo");
     if (cover > 0.97) throw new Error("The item couldn't be told apart from the background");
@@ -1736,6 +1944,118 @@ function clientApp() {
     return { b64: b64of(fc, "image/jpeg", 0.9), t: b64of(shrink(fc, 360), "image/jpeg", 0.8), cover };
   };
 
+  // ---- stickers and Vintly's QR code on the copies sent to Vinted ----
+  const STICKERS = ["⭐", "🌈", "🎈", "✨", "🦄", "🚀", "💖", "🎉", "🌟", "🧸", "🍭", "🐣", "🦋", "🍀", "🎀", "🪁"];
+  const rng = seed => { let s = (seed >>> 0) || 1; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; };
+  function qrModules() {
+    const [n, hex] = String(window.__QR || "").split(":"), N = +n, bits = [];
+    for (const h of hex || "") { const v = parseInt(h, 16); for (let b = 3; b >= 0; b--) bits.push((v >> b) & 1); }
+    return { n: N, on: (x, y) => bits[y * N + x] === 1 };
+  }
+  // How much of the item (not the background) a rectangle covers: 0 is empty background. The background is the
+  // photo's edge colour (white on a cut-out); colour far from it, or busy texture, counts as the item.
+  function costMap(c) {
+    const gw = 48, gh = Math.max(8, Math.round(48 * c.height / c.width)), sc = canvas(gw * 3, gh * 3), sx = sc.getContext("2d");
+    sx.drawImage(c, 0, 0, sc.width, sc.height);
+    const d = sx.getImageData(0, 0, sc.width, sc.height).data, mean = [], dev = [];
+    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+      let r = 0, g = 0, b = 0, l2 = 0, l = 0;
+      for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) { const i = ((gy * 3 + y) * sc.width + gx * 3 + x) * 4, L = d[i] * .3 + d[i + 1] * .59 + d[i + 2] * .11; r += d[i]; g += d[i + 1]; b += d[i + 2]; l += L; l2 += L * L; }
+      mean.push([r / 9, g / 9, b / 9]); dev.push(Math.sqrt(Math.max(0, l2 / 9 - (l / 9) * (l / 9))));
+    }
+    const edge = []; for (let gx = 0; gx < gw; gx++) { edge.push(mean[gx], mean[(gh - 1) * gw + gx]); } for (let gy = 0; gy < gh; gy++) { edge.push(mean[gy * gw], mean[gy * gw + gw - 1]); }
+    const med = k => { const v = edge.map(e => e[k]).sort((a, b) => a - b); return v[v.length >> 1]; }, bg = [med(0), med(1), med(2)];
+    const cell = mean.map((m, i) => Math.min(3, Math.hypot(m[0] - bg[0], m[1] - bg[1], m[2] - bg[2]) / 45 + dev[i] / 18));
+    const f = (x, y, w, h, hits) => {   // average cost over a rectangle in photo pixels (hits: the share of cells that are the item)
+      const x0 = Math.max(0, Math.floor(x / c.width * gw)), x1 = Math.min(gw - 1, Math.floor((x + w) / c.width * gw)), y0 = Math.max(0, Math.floor(y / c.height * gh)), y1 = Math.min(gh - 1, Math.floor((y + h) / c.height * gh));
+      let s = 0, n = 0; for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) { s += hits ? (cell[gy * gw + gx] > 0.6 ? 1 : 0) : cell[gy * gw + gx]; n++; }
+      return n ? s / n : 3;
+    };
+    f.bg = bg;
+    return f;
+  }
+  function rounded(x, X, Y, W, H, r) { x.beginPath(); x.moveTo(X + r, Y); x.arcTo(X + W, Y, X + W, Y + H, r); x.arcTo(X + W, Y + H, X, Y + H, r); x.arcTo(X, Y + H, X, Y, r); x.arcTo(X, Y, X + W, Y, r); x.closePath(); }
+  function drawQR(x, X, Y, q) {   // a white card: the code, then "Vintly · scan me"
+    const { n, on } = qrModules(); if (!n) return;
+    const lab = q * 0.2, pad = q * 0.07, mod = (q - 2 * pad) / n;
+    x.save(); x.shadowColor = "rgba(0,0,0,.22)"; x.shadowBlur = q * 0.06; x.shadowOffsetY = q * 0.02;
+    x.fillStyle = "#ffffff"; rounded(x, X, Y, q, q + lab, q * 0.08); x.fill(); x.restore();
+    x.fillStyle = "#0E1116";
+    for (let yy = 0; yy < n; yy++) for (let xx = 0; xx < n; xx++) if (on(xx, yy)) x.fillRect(Math.floor(X + pad + xx * mod), Math.floor(Y + pad + yy * mod), Math.ceil(mod), Math.ceil(mod));
+    x.textAlign = "center"; x.textBaseline = "middle";
+    x.font = `800 ${Math.round(lab * 0.5)}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+    const t1 = "Vint", t2 = "ly", w1 = x.measureText(t1).width, w2 = x.measureText(t2).width, tx = X + q / 2 - (w1 + w2) / 2, ty = Y + q + lab * 0.38;
+    x.textAlign = "left"; x.fillStyle = "#0E1116"; x.fillText(t1, tx, ty); x.fillStyle = "#0FA192"; x.fillText(t2, tx + w1, ty);
+    x.textAlign = "center"; x.fillStyle = "#5B6470"; x.font = `600 ${Math.round(lab * 0.3)}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
+    x.fillText("📲 scan me", X + q / 2, Y + q + lab * 0.78);
+  }
+  function drawSticker(x, cx, cy, sz, emoji, rot) {
+    x.save(); x.translate(cx, cy); x.rotate(rot);
+    x.shadowColor = "rgba(0,0,0,.2)"; x.shadowBlur = sz * 0.1; x.shadowOffsetY = sz * 0.04;
+    x.fillStyle = "#ffffff"; x.beginPath(); x.arc(0, 0, sz * 0.52, 0, Math.PI * 2); x.fill();
+    x.shadowColor = "transparent";
+    x.font = `${Math.round(sz * 0.62)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    x.textAlign = "center"; x.textBaseline = "middle"; x.fillText(emoji, 0, sz * 0.04);
+    x.restore();
+  }
+  // o: { stickers, qr, seed, max }. Stickers go where there's background, never over the item when there's room.
+  window.__decorate = async (src, o) => {
+    const img = await loadImg(/^data:|^blob:|^https?:/.test(src) ? src : "data:image/jpeg;base64," + src);
+    let c = shrink(img, o.max || 1600), x = c.getContext("2d"), W = c.width, H = c.height;
+    const m = Math.min(W, H), R = rng(o.seed || 1);
+    let cost = costMap(c);
+    const taken = [];
+    if (o.qr) {
+      const q = m * 0.24, h = q * 1.2, e = m * 0.035;
+      const spots = () => [[W - q - e, H - h - e, 0], [e, H - h - e, 0.08], [W - q - e, e, 0.12], [e, e, 0.16]]
+        .map(([X, Y, bias]) => ({ X, Y, s: cost(X, Y, q, h, true) + bias / 10 })).sort((a, b) => a.s - b.s);
+      let s = spots()[0];
+      if (s.s > 0.03) {   // the item fills the corners: room below the photo, in its background colour, so the card covers nothing
+        const add = h + 2 * e, n = canvas(W, H + add), nx = n.getContext("2d"), [r, g, b] = cost.bg.map(Math.round);
+        nx.fillStyle = `rgb(${r},${g},${b})`; nx.fillRect(0, 0, W, H + add); nx.drawImage(c, 0, 0);
+        c = n; x = nx; H = c.height; cost = costMap(c);
+        s = { X: W - q - e, Y: H - h - e };
+      }
+      drawQR(x, s.X, s.Y, q); taken.push([s.X + q / 2, s.Y + h / 2, Math.max(q, h) * 0.75]);
+    }
+    if (o.stickers) {
+      const sz = m * 0.15, want = o.qr ? 3 : 4, pts = [];
+      for (const fx of [0.1, 0.3, 0.5, 0.7, 0.9]) for (const fy of [0.08, 0.3, 0.5, 0.7, 0.92]) {
+        if (!(fx === 0.1 || fx === 0.9 || fy === 0.08 || fy === 0.92)) continue;   // only along the edges
+        const cx = fx * W, cy = fy * H;
+        pts.push({ cx, cy, s: cost(cx - sz / 2, cy - sz / 2, sz, sz) + R() * 0.15 });
+      }
+      pts.sort((a, b) => a.s - b.s);
+      const pick = [], pool = STICKERS.slice();
+      for (const p of pts) {
+        if (pick.length >= want) break;
+        if (p.s > 1.4 && pick.length >= 2) break;   // past two, only where it's clearly background
+        if (taken.concat(pick.map(k => [k.cx, k.cy, sz * 1.25])).some(([tx, ty, r]) => Math.hypot(tx - p.cx, ty - p.cy) < r + sz * 0.6)) continue;
+        pick.push(p);
+      }
+      pick.forEach(p => drawSticker(x, p.cx, p.cy, sz * (0.85 + R() * 0.3), pool.splice(Math.floor(R() * pool.length), 1)[0], (R() - 0.5) * 0.7));
+    }
+    return { b64: b64of(c, "image/jpeg", 0.9) };
+  };
+
+  async function decoPreview(id) {
+    const x = S.items.find(i => i.id === id); if (!x) return;
+    const kids = /vaik|kūdik|žaisl|kid|child|baby|toy|enfant|jouet|kinder|spielzeug|dzieci|zabawk|bambin|giocattol|niñ|juguet/i.test((x.listing || {}).catalogPath || "");
+    const st = S.settings.stickers === "all" || (S.settings.stickers === "kids" && kids);
+    const el = $("#decoview"); el.hidden = false;
+    el.innerHTML = `<div class="dv-box"><div class="dv-head"><b>What buyers see</b><button class="link" data-act="decoclose">Close</button></div>
+      <div class="dv-grid">${x.photos.map(() => `<div class="dv-ph"><span class="busy-dot"></span></div>`).join("")}</div>
+      <small class="muted">${st ? "Stickers" : "No stickers"}${S.settings.qrBadge ? " · Vintly QR code on the main photo" : ""} · Settings › Photos</small></div>`;
+    const cells = el.querySelectorAll(".dv-ph");
+    for (let i = 0; i < x.photos.length; i++) {
+      try {
+        const r = await window.__decorate(thumb(x.photos[i]), { stickers: st, qr: S.settings.qrBadge && i === 0, seed: seedOf(x.id) + i, max: 720 });
+        cells[i].innerHTML = `<img src="data:image/jpeg;base64,${r.b64}" alt="Photo ${i + 1} as posted">`;
+      } catch (e) { cells[i].textContent = "—"; }
+    }
+  }
+  const seedOf = s => { let h = 7; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
+
   // ---- numbers and time ----
   function money(v) {
     if (v == null || !isFinite(v)) return "—";
@@ -1749,16 +2069,17 @@ function clientApp() {
     const h = Math.round(m / 60); if (h < 24) return h + " h ago";
     const d = Math.round(h / 24); return d === 1 ? "yesterday" : d < 7 ? d + " days ago" : new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
-  function lockBody() { document.body.classList.toggle("locked", !!(openId || cfgOpen || aiOpen || (batchOpen && S.batch))); }
+  function lockBody() { document.body.classList.toggle("locked", !!(openId || cfgOpen || aiOpen || vOpen || convOpen || (batchOpen && S.batch))); }
   function arm2(key, rerender) { armed = key; rerender(); setTimeout(() => { if (armed === key) { armed = null; rerender(); } }, 3500); }
 
   // ---- the main page ----
   const todo = () => S.items.filter(x => x.status !== "posted"), posted = () => S.items.filter(x => x.status === "posted");
-  function renderAll() { renderTop(); render(); renderItem(); renderBatch(); renderTray(); renderAI(); renderCfg(); }
+  function renderAll() { renderTop(); render(); renderItem(); renderBatch(); renderTray(); renderAI(); renderCfg(); renderVItem(); renderConv(); }
   function renderTop() {
     $("#status").innerHTML = S.vinted.ok ? `Signed in to ${esc(S.vinted.site)}` : `<button class="link small" data-act="vsignin">Sign in to ${esc(S.vinted.site)}</button>`;
-    $("#tabs").innerHTML = [["todo", "To post", todo().length], ["posted", "Posted", posted().length]]
-      .map(([k, l, n]) => `<button class="${tab === k ? "on" : ""}" data-act="tab" data-v="${k}">${l} <span class="n">${n}</span></button>`).join("");
+    const V = S.vt || {}, live = (V.wardrobe || []).filter(w => !w.sold && !w.draft).length;
+    $("#tabs").innerHTML = [["todo", "To post", todo().length, false], ["posted", "On Vinted", S.vinted.ok && V.wardrobe ? live : posted().length, false], ["msgs", "Messages", V.unread || 0, true]]
+      .map(([k, l, n, hot]) => `<button class="${tab === k ? "on" : ""}" data-act="tab" data-v="${k}">${l} <span class="n ${hot && n ? "hot" : ""}">${n}</span></button>`).join("");
   }
   function statusOf(x) {
     if (x.busy) return ["busy", "Working…"];
@@ -1778,14 +2099,83 @@ function clientApp() {
         <span class="chip st-${k}">${st}</span></span>
       <span class="c-p">${L.price ? money(L.price) : ""}</span></button>`;
   }
-  function render() {
-    const main = $("#main");
-    if (tab === "posted") {
-      const list = posted();
-      main.innerHTML = list.length ? `<div class="cards">${list.map(card).join("")}</div><p class="note center">Posted items are kept here for ${S.cfg.keepPostedDays} days.</p>`
-        : `<div class="empty small">Nothing posted yet. Items you post on Vinted show up here.</div>`;
+  // ---- your Vinted account: listings and messages ----
+  const signinBanner = what => `<div class="banner"><b>Sign in to Vinted</b><span>${what}</span><button class="sm primary" data-act="vsignin">Sign in</button></div>`;
+  const fresh = (at, busy, act) => `<div class="acct-bar"><small class="muted">${busy ? `<span class="busy-dot"></span> Checking Vinted…` : at ? "Checked " + rel(at) : "Not checked yet"}</small><button class="sm" data-act="acctrefresh" data-v="${act}" ${busy ? "disabled" : ""}>Refresh</button></div>`;
+  function vCard(w) {
+    const tags = [w.sold && ["done", "Sold"], w.reserved && ["warn", "Reserved"], w.hidden && ["new", "Hidden"], w.draft && ["new", "Draft"]].filter(Boolean);
+    return `<button class="card" data-act="vopen" data-v="${w.id}">
+      <span class="thumbs">${w.photo ? `<img src="${esc(w.photo)}" alt="" loading="lazy">` : `<i class="noimg"></i>`}</span>
+      <span class="c-b"><b class="c-t">${esc(w.title)}</b><small class="muted">👁 ${w.views} · ♥ ${w.favs}${w.status ? " · " + esc(w.status) : ""}</small>
+        ${tags.map(([k, l]) => `<span class="chip st-${k}">${l}</span>`).join("")}</span>
+      <span class="c-p">${money(w.price)}</span></button>`;
+  }
+  function renderPosted(main) {
+    const V = S.vt || {}, mine = posted();
+    if (!S.vinted.ok) {
+      main.innerHTML = signinBanner("Sign in to see all your listings on Vinted and delete the ones you no longer sell.") +
+        (mine.length ? `<div class="cards">${mine.map(card).join("")}</div>` : `<div class="empty small">Nothing posted yet. Items you post on Vinted show up here.</div>`);
       return;
     }
+    const list = V.wardrobe || [], live = list.filter(w => !w.sold), sold = list.filter(w => w.sold);
+    main.innerHTML = fresh(V.wardrobeAt, V.loading && V.loading.wardrobe, "all") +
+      (list.length ? `<div class="cards">${live.map(vCard).join("")}</div>${sold.length ? `<h3 class="sec">Sold</h3><div class="cards">${sold.map(vCard).join("")}</div>` : ""}`
+        : `<div class="empty small">${V.wardrobe ? "No listings on Vinted yet." : "Loading your listings…"}</div>`) +
+      (mine.length ? `<h3 class="sec">Posted with Vintly</h3><div class="cards">${mine.map(card).join("")}</div><p class="note center">Kept here for ${S.cfg.keepPostedDays} days.</p>` : "");
+  }
+  function renderMsgs(main) {
+    const V = S.vt || {};
+    if (!S.vinted.ok) { main.innerHTML = signinBanner("Sign in to read and answer your Vinted messages here."); return; }
+    const list = V.convs || [];
+    main.innerHTML = fresh(V.inboxAt, V.loading && V.loading.inbox, "inbox") + (V.unread ? `<p class="unread-line">💬 <b>${V.unread}</b> unread message${V.unread === 1 ? "" : "s"}</p>` : "") +
+      (list.length ? `<div class="convs">${list.map(c => `<button class="conv ${c.unread ? "unread" : ""}" data-act="conv" data-v="${esc(c.id)}">
+          <span class="cv-ph">${c.photo ? `<img src="${esc(c.photo)}" alt="" loading="lazy">` : c.avatar ? `<img src="${esc(c.avatar)}" alt="" loading="lazy">` : `<i>${esc((c.who || "?").slice(0, 1).toUpperCase())}</i>`}</span>
+          <span class="cv-b"><span class="cv-top"><b>${esc(c.who)}</b><small class="muted">${c.at ? rel(c.at) : ""}</small></span>
+            ${c.item ? `<small class="cv-item">${esc(c.item)}</small>` : ""}<span class="cv-last">${esc(c.last)}</span></span>
+          ${c.unread ? `<span class="cv-dot" aria-label="unread"></span>` : ""}</button>`).join("")}</div>`
+        : `<div class="empty small">${V.convs ? "No messages yet." : "Loading your messages…"}</div>`);
+  }
+  // A listing on Vinted: open it there, or delete it (two taps)
+  function renderVItem() {
+    const el = $("#vsheet"), w = vOpen && ((S.vt || {}).wardrobe || []).find(x => x.id === vOpen);
+    if (vOpen && !w) vOpen = null;
+    el.classList.toggle("open", !!w); lockBody();
+    if (!w) return;
+    const del = S.vt.loading && S.vt.loading.del === w.id;
+    el.innerHTML = `<div class="sh-head"><h2>${esc(w.title.length > 26 ? w.title.slice(0, 25) + "…" : w.title)}</h2><button class="link" data-act="vclose">Done</button></div><div class="sh-body">
+      ${w.photo ? `<img class="v-hero" src="${esc(w.photo)}" alt="">` : ""}
+      <p class="v-price">${money(w.price)}</p>
+      <p class="muted">👁 ${w.views} views · ♥ ${w.favs} favourites${w.status ? " · " + esc(w.status) : ""}${w.sold ? " · Sold" : w.reserved ? " · Reserved" : w.hidden ? " · Hidden" : ""}</p>
+      ${w.url ? `<button class="primary wide" data-act="openvinted" data-v="${esc(w.url)}">Open on Vinted</button>` : ""}
+      <button class="sm wide danger ${armed === "vdel" + w.id ? "armed" : ""}" data-act="vdel" data-v="${w.id}" ${del ? "disabled" : ""}>${del ? "Deleting…" : armed === "vdel" + w.id ? "Confirm: delete from Vinted for good" : "Delete from Vinted"}</button>
+      <p class="note center">Deleting removes the listing on Vinted for everyone. It can't be undone.</p></div>`;
+  }
+  // One conversation: the messages, and your reply
+  function renderConv() {
+    const el = $("#convsheet"), C = (S.vt || {}).conv;
+    if (convOpen && !C) convOpen = false;
+    el.classList.toggle("open", !!convOpen); lockBody();
+    if (!convOpen) return;
+    const L = S.vt.loading || {}, c = ((S.vt.convs || []).find(x => x.id === C.id)) || {};
+    const ta = el.querySelector("#replybox"), had = ta && document.activeElement === ta;
+    if (ta) replyDraft = ta.value;
+    if (C.draft && !replyDraft) replyDraft = C.draft;
+    el.innerHTML = `<div class="sh-head"><h2>${esc(C.who || c.who || "Message")}</h2><button class="link" data-act="convclose">Done</button></div>
+      <div class="sh-body conv-body">${C.item || c.item ? `<p class="cv-item center">${esc(C.item || c.item)}</p>` : ""}
+      ${L.conv && !C.msgs ? `<div class="working"><span class="busy-dot"></span>Loading the conversation…</div>` : ""}
+      <div class="bubbles">${(C.msgs || []).map(m => `<div class="bub ${m.mine ? "me" : "them"} ${m.type !== "message" ? "sys" : ""}"><span>${esc(m.text).replace(/\n/g, "<br>")}</span><small>${m.at ? rel(m.at) : ""}</small></div>`).join("")}</div>
+      ${C.err ? `<p class="err">${esc(C.err)}</p>` : ""}</div>
+      <div class="composer"><textarea id="replybox" rows="2" placeholder="Write a reply…" aria-label="Your reply">${esc(replyDraft)}</textarea>
+        <div class="cmp-btns">${C.personal ? `<button class="sm" data-act="replysend" data-v="anyway" ${L.sending ? "disabled" : ""}>Send anyway</button>` : ""}
+        <button class="sm primary" data-act="replysend" ${L.sending ? "disabled" : ""}>${L.sending ? "Sending…" : "Send"}</button></div></div>`;
+    const nb = el.querySelector(".sh-body"); nb.scrollTop = nb.scrollHeight;
+    if (had) { const t2 = el.querySelector("#replybox"); t2.focus(); t2.setSelectionRange(t2.value.length, t2.value.length); }
+  }
+
+  function render() {
+    const main = $("#main");
+    if (tab === "posted") return renderPosted(main);
+    if (tab === "msgs") return renderMsgs(main);
     const list = todo();
     const add = `<div class="addbar"><button class="primary" data-act="cam"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Take photos</button>
       <button class="sm big2" data-act="lib"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>Choose photos</button></div>`;
@@ -1900,6 +2290,7 @@ function clientApp() {
     const canPost = !x.busy && S.vinted.ok && !miss.length;
     el.innerHTML = `<div class="sh-head"><h2>${esc(clip2(L.title || (x.ai && x.ai.what) || x.hint || "New item", 26))}</h2><button class="link" data-act="close">Done</button></div><div class="sh-body">
       ${photosHTML(x)}
+      ${x.status !== "posted" && x.photos.length && (S.settings.stickers !== "off" || S.settings.qrBadge) ? `<button class="link small block" data-act="decoprev">👀 See the photos as buyers will</button>` : ""}
       ${posted2 ? `<div class="banner ok"><b>${x.vinted.draft ? "Saved as a draft on Vinted" : "On Vinted"} · ${rel(x.vinted.at)}</b><button class="sm primary" data-act="openvinted" data-v="${esc(x.vinted.url)}">${x.vinted.draft ? "Finish it on Vinted" : "Open on Vinted"}</button></div>` : `
       <label class="fl"><span>Anything AI should know? <small class="muted">optional</small></span><textarea class="fin" data-k="notes" rows="2" placeholder="e.g. works fine, the stick is missing, age 3+">${esc(x.notes)}</textarea></label>
       ${S.settings.hasKey ? `<button class="primary wide ai" data-act="prepare" ${x.busy ? "disabled" : ""}>✦ ${x.ai ? "Prepare again" : "Prepare with AI"}</button>
@@ -1991,6 +2382,9 @@ function clientApp() {
       <div class="lk-row"><span class="lk-l">Cleaning photos</span><div class="seg wide">${[["keep", "Keep the item's pixels"], ["studio", "✦ Studio photo"], ["off", "Off"]].map(([v, l]) => `<button class="${S.settings.cleanStyle === v ? "on" : ""}" data-act="clean" data-v="${v}">${l}</button>`).join("")}</div>
         <small class="muted">${S.settings.cleanStyle === "studio" ? "The image model redraws each photo on white. Sharp and tidy, but drawn by AI: Vinted is told so." : S.settings.cleanStyle === "off" ? "Photos are posted as you took them." : "The image model outlines the item; Vintly cuts your own photo along it and puts it on white. The item stays exactly as photographed."}
         ${A.hasOpenAI ? "" : ` <span class="danger">Needs an OpenAI key (AI settings).</span>`}</small></div>
+      <div class="lk-row"><span class="lk-l">Stickers for kids</span><div class="seg wide">${[["all", "All items"], ["kids", "Kids' items"], ["off", "Off"]].map(([v, l]) => `<button class="${S.settings.stickers === v ? "on" : ""}" data-act="stk" data-v="${v}">${l}</button>`).join("")}</div>
+        <small class="muted">Fun stickers like ⭐ 🎈 🦄 around the item, where there's background, on the photos sent to Vinted. Your own photos stay as they are.</small></div>
+      ${sw("qrBadge", "Vintly QR code on the main photo", `A small card buyers can scan to get Vintly on GitHub. <span class="danger">Vinted's rules don't allow links to other sites, so Vinted may hide listings with it.</span>`)}
       ${S.usageAvailable ? `<h3 class="sec">Privacy</h3>
       <div class="srow"><div class="grow"><b>Share anonymous usage</b><small class="muted">Counts like app opens and how many items you prepare and post, with a random install ID. Never your photos, titles, prices or your Vinted account. Off removes the ID.</small></div><button class="switch ${S.settings.shareUsage ? "on" : ""}" data-act="toggle" data-v="shareUsage" aria-label="Share anonymous usage"></button></div>
       <div class="srow"><div class="grow"><b>Test the connection</b><small id="usagemsg" class="muted" aria-live="polite">${esc(S.usageStatus || "Sends one test event now and shows PostHog’s answer.")}</small></div><button class="sm" data-act="usage-test">Send test</button></div>` : ""}
@@ -2118,6 +2512,13 @@ function clientApp() {
       case "draft": send("post", { id: openId, draft: true }); break;
       case "delitem": if (armed === "del" + openId) { armed = null; const id = openId; openId = null; send("delitem", { id }); renderItem(); } else arm2("del" + openId, renderItem); break;
       case "openvinted": send("openvinted", { v }); break;
+      case "acctrefresh": send("acctrefresh", { v }); break;
+      case "vopen": vOpen = +v; armed = null; renderVItem(); $("#vsheet").scrollTop = 0; break;
+      case "vclose": vOpen = null; renderVItem(); break;
+      case "vdel": if (armed === "vdel" + v) { armed = null; send("vdel", { v }); renderVItem(); } else arm2("vdel" + v, renderVItem); break;
+      case "conv": convOpen = true; replyDraft = ""; S.vt.conv = { id: v, msgs: null }; S.vt.loading = Object.assign({}, S.vt.loading, { conv: true }); renderConv(); send("conv", { v }); break;
+      case "convclose": convOpen = false; replyDraft = ""; send("convclose", {}); renderConv(); render(); renderTop(); break;
+      case "replysend": { const ta = $("#replybox"), text = ta ? ta.value.trim() : ""; if (!text || !S.vt.conv) break; replyDraft = ""; ta.value = ""; send("reply", { id: S.vt.conv.id, text, anyway: v === "anyway" }); break; }
       case "bgpick": bgPick = bgPick === v ? null : v; renderBatch(); e.stopPropagation(); return;
       case "bgto": {
         if (!bgPick) break;
@@ -2131,6 +2532,9 @@ function clientApp() {
       case "batchmake": batchOpen = false; send("batchmake", { groups: bg }); renderBatch(); break;
       case "batchcancel": batchOpen = false; send("batchcancel", {}); renderBatch(); break;
       case "clean": S.settings.cleanStyle = v; send("set", { k: "cleanStyle", v }); renderCfg(); break;
+      case "stk": S.settings.stickers = v; send("set", { k: "stickers", v }); renderCfg(); break;
+      case "decoprev": decoPreview(openId); break;
+      case "decoclose": $("#decoview").hidden = true; break;
       case "look": {
         const k = t.dataset.k, val = k === "textSize" ? +v : v;
         look[k] = val; send("set", { k, v: val }); applyLook(); render(); renderCfg(); break;
@@ -2286,7 +2690,34 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 /* sheets (app-blueprints · settings) */
 .sheet{position:fixed;inset:0;z-index:10;background:var(--paper);transform:translateY(102%);transition:transform .28s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .sheet.open{transform:none}
-#itemsheet{z-index:11} #batchsheet{z-index:12} #cfgsheet{z-index:13}
+#itemsheet{z-index:11} #batchsheet{z-index:12} #cfgsheet{z-index:13} #vsheet,#convsheet{z-index:11}
+.tabs .n.hot{background:var(--signal);color:var(--paper);border-radius:999px;padding:0 7px;font-weight:700}
+.acct-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:4px 0 10px}
+.unread-line{margin:0 0 10px;font-size:calc(15px * var(--ts))}
+.convs{display:flex;flex-direction:column;gap:8px}
+.conv{display:flex;gap:12px;align-items:center;text-align:left;width:100%;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:10px 12px;color:var(--ink);font:inherit}
+.conv.unread{border-color:var(--signal)}
+.conv.unread .cv-top b{color:var(--signal)}
+.cv-ph{flex:none;width:48px;height:48px;border-radius:10px;overflow:hidden;background:var(--rule);display:flex;align-items:center;justify-content:center}
+.cv-ph img{width:100%;height:100%;object-fit:cover} .cv-ph i{font-style:normal;font-weight:700;color:var(--muted)}
+.cv-b{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.cv-top{display:flex;justify-content:space-between;gap:8px}
+.cv-item{color:var(--muted);font-size:calc(12px * var(--ts));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cv-last{font-size:calc(13.5px * var(--ts));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2)}
+.cv-dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--signal)}
+.v-hero{width:100%;max-height:52vh;object-fit:contain;border-radius:14px;background:var(--rule)}
+.v-price{font-size:calc(26px * var(--ts));font-weight:800;margin:10px 0 2px}
+#convsheet{display:flex;flex-direction:column;overflow:hidden}
+#convsheet .conv-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.bubbles{display:flex;flex-direction:column;gap:8px;padding:6px 0 10px}
+.bub{max-width:82%;display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-radius:16px;font-size:calc(15px * var(--ts));line-height:1.35}
+.bub small{font-size:calc(11px * var(--ts));opacity:.7}
+.bub.them{align-self:flex-start;background:var(--sheet);border:1px solid var(--rule);border-bottom-left-radius:5px}
+.bub.me{align-self:flex-end;background:var(--signal);color:var(--paper);border-bottom-right-radius:5px}
+.bub.sys{align-self:center;background:var(--amber-wash,var(--rule));color:var(--ink);border-radius:12px;font-size:calc(13px * var(--ts))}
+.composer{flex:none;display:flex;gap:8px;align-items:flex-end;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid var(--rule);background:var(--paper)}
+.composer textarea{flex:1;font-size:16px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);padding:9px 11px;resize:none;font-family:inherit}
+.cmp-btns{display:flex;flex-direction:column;gap:6px}
 .sh-head{position:sticky;top:0;z-index:2;background:var(--paper);display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;border-bottom:1px solid var(--rule)}
 .sh-head h2{font:700 calc(24px * var(--ts))/1.1 var(--display);margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sh-body{padding:16px 18px calc(env(safe-area-inset-bottom) + 40px);max-width:720px;margin:0 auto}
@@ -2350,6 +2781,13 @@ button.srow{width:100%;text-align:left}
 .ph{position:relative;flex:none;width:118px;display:flex;flex-direction:column;gap:5px}
 .ph img{width:118px;height:150px;object-fit:cover;border-radius:12px;background:var(--sheet);border:1px solid var(--rule);display:block}
 .ph-main{position:absolute;left:6px;top:6px;font-size:calc(11px * var(--ts));font-weight:700;background:var(--ink);color:var(--paper);border-radius:6px;padding:1px 6px}
+#decoview{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:18px}
+#decoview[hidden]{display:none}
+.dv-box{background:var(--sheet);border-radius:18px;padding:14px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.dv-head{display:flex;justify-content:space-between;align-items:center}
+.dv-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.dv-ph{aspect-ratio:3/4;background:var(--soft,var(--rule));border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.dv-ph img{width:100%;height:100%;object-fit:cover}
 .ph-err{font-size:calc(11.5px * var(--ts));color:var(--amber);text-align:center}
 .ph-tools{display:flex;justify-content:space-between;gap:4px}
 .ph-tools button{flex:1;height:30px;border-radius:8px;border:1px solid var(--rule);background:var(--sheet);font-size:calc(17px * var(--ts));font-weight:600;line-height:1}
@@ -2553,6 +2991,9 @@ const buildHTML = () => `<!doctype html><html data-theme="${initTheme()}" data-f
 <div id="batchsheet" class="sheet" aria-label="New photos"></div>
 <div id="cfgsheet" class="sheet" aria-label="Settings"></div>
 <div id="aisheet" class="sheet" aria-label="AI settings"></div>
+<div id="vsheet" class="sheet" aria-label="Listing on Vinted"></div>
+<div id="convsheet" class="sheet" aria-label="Conversation"></div>
+<div id="decoview" hidden></div>
 <div id="toast" role="status"></div>
 <script>
 // Launch screen (app-blueprints · launch-screen 1.0.0): first, self-contained
@@ -2564,6 +3005,7 @@ const buildHTML = () => `<!doctype html><html data-theme="${initTheme()}" data-f
   setTimeout(gone, 2900);               // out of the page once the CSS fade is done
 })();
 window.__LOGO = ${safeJSON(LOGO_SVG)};
+window.__QR = ${safeJSON(QR_VINTLY)};
 // The page goes on screen first; Scriptable hands over the data once it has read it (recipe safe-startup).
 window.__parts = [];
 window.__bootNote = function (title, detail) {
@@ -2596,12 +3038,17 @@ window.__boot = function (st) {
 // The snapshot the widget reads (saveWidget): how many items wait to be posted, how many are ready, and the latest
 // posted ones. Saved when you close Vintly and after preparing, posting or deleting. No photos, no account details.
 function widgetSnapshot() {
+  const A = vAccount();
   const todo = items.filter(x => x.status !== "posted"), done = items.filter(x => x.status === "posted" && x.vinted);
   const week = done.filter(x => Date.now() - x.vinted.at < 7 * DAY && !x.vinted.draft);
   return {
     todo: todo.length, ready: todo.filter(x => !missingFor(x).length).length, cur: currencyOf(),
     posted7: week.length, value7: week.reduce((n, x) => n + (+(x.listing || {}).price || 0), 0),
     recent: done.sort((a, b) => b.vinted.at - a.vinted.at).slice(0, 6).map(x => ({ t: clip((x.listing || {}).title || "Item", 60), p: +(x.listing || {}).price || 0, at: x.vinted.at, draft: !!x.vinted.draft })),
+    // Your Vinted messages: how many wait unread, and who wrote last (names and items only, never the messages)
+    signedIn: !!settings.vintedOk, inboxAt: A.inboxAt || 0, unread: A.unread || 0,
+    convs: (A.convs || []).slice().sort((a, b) => (b.unread - a.unread) || (b.at - a.at)).slice(0, 6).map(c => ({ who: clip(c.who, 30), item: clip(c.item, 50), at: c.at, unread: !!c.unread })),
+    listings: (A.wardrobe || []).filter(x => !x.sold && !x.draft).length, sold: (A.wardrobe || []).filter(x => x.sold).length,
   };
 }
 const wMoney = (v, cur) => { try { return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "EUR", maximumFractionDigits: v % 1 ? 2 : 0 }).format(v); } catch (e) { return v + " " + (cur || ""); } };
@@ -2609,6 +3056,19 @@ const wMoney = (v, cur) => { try { return new Intl.NumberFormat(undefined, { sty
 // snapshot every time, so the model has no "at" (it can't go out of date).
 async function widgetModel() {
   const w = readWidget();
+  // Signed in: your unread Vinted messages lead, with who wrote; what waits to be posted goes in the badge
+  if (w && w.signedIn && w.inboxAt) {
+    const rows = (w.convs || []).map(c => ({ icon: c.unread ? "●" : "💬", text: c.who + (c.item ? " · " + c.item : ""), sub: [c.unread ? "unread" : "", wWhen(c.at)].filter(Boolean).join(" · ") }));
+    return {
+      at: w.inboxAt,
+      badge: w.todo ? w.todo + " to post" : null,
+      kicker: "Vinted messages",
+      value: String(w.unread), caption: w.unread === 1 ? "unread message" : "unread messages", valueTone: w.unread ? "accent" : "ink",
+      rows,
+      footer: `${w.listings} on Vinted${w.sold ? " · " + w.sold + " sold" : ""}${w.todo ? " · " + w.todo + " to post" : ""}`,
+      accessory: { glyph: "💬", value: w.unread, inline: `💬 ${w.unread} unread${w.todo ? " · 🏷 " + w.todo + " to post" : ""}` },
+    };
+  }
   if (!w || (!w.todo && !(w.recent || []).length)) return { empty: "No items yet. Tap to snap your first one.", accessory: { glyph: "🏷", value: 0 } };
   const rows = (w.recent || []).map(r => ({ icon: r.draft ? "✎" : "✓", text: r.t, sub: [r.p ? wMoney(r.p, w.cur) : "", r.draft ? "draft" : "", wWhen(r.at)].filter(Boolean).join(" · ") }));
   return {
@@ -2900,7 +3360,10 @@ async function bootApp(isClosed) {
       const list = shared.map(img => { const big = scaledJPEG(img, cfg("photoMax")), small = scaledJPEG(img, 360); return { b64: big.b64, t: small.b64, w: big.w, h: big.h }; });
       await addPhotos(list, "", "share").catch(e => toast(String(e.message || e)));
     }
-    if (Date.now() - (settings.vintedAt || 0) > 6 * 3600e3 || !settings.vintedOk) { await vintedCheck(); if (!isClosed()) push(); }
+    if (Date.now() - (settings.vintedAt || 0) > 6 * 3600e3 || !settings.vintedOk || !settings.vintedUser) { await vintedCheck(); if (!isClosed()) push(); }
+    // Your messages and listings, fresh on every open; then the unread count again every few minutes while Vintly is open
+    if (!isClosed() && settings.vintedOk) await refreshAccount(true, false);
+    const every = Timer.schedule(cfg("inboxEveryMin") * 60000, true, () => { if (isClosed()) every.invalidate(); else if (settings.vintedOk && !vLoading.inbox) refreshAccount(false, false); });
   });
   Timer.schedule(3500, false, () => {
     if (isClosed() || updateChecked) return;
