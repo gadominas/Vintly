@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const SCRIPT_FILE = 'Vintly.js';   // the script's file name in the repository
@@ -574,7 +574,7 @@ function vjs(body, ms = cfg("vintedTimeout") * 1000) {
 }
 async function vjsOne(body, ms) {
   const w = await vintedPage();
-  const js = "(" + vHelpers.toString() + ")();\n(async () => {\n" + body + "\n})().then(r => completion(JSON.stringify({ ok: true, r: r === undefined ? null : r })), e => completion(JSON.stringify({ ok: false, e: String(e && e.message || e) })));";
+  const js = "(" + vHelpers.toString() + ")();\n(async () => {\n" + body + "\n})().then(r => completion(JSON.stringify({ ok: true, r: r === undefined ? null : r })), e => completion(JSON.stringify({ ok: false, e: String(e && e.message || e) })));\n'pending';";   // last value must be plain: WebKit can't hand a Promise back
   const out = await Promise.race([w.evaluateJavaScript(js, true), pause(ms).then(() => { throw new Error("Vinted didn't answer in " + Math.round(ms / 1000) + " s"); })]);
   let o = {};
   try { o = JSON.parse(out || "{}"); } catch (e) { throw new Error("Vinted's page sent something unexpected"); }
@@ -595,8 +595,9 @@ async function vintedCheck() {
     if (a.status === 200 && a.j && Array.isArray(a.j.colors)) {
       const c = vCacheGet(); c.colors = a.j.colors.map(x => ({ id: x.id, title: x.title, hex: x.hex, code: x.code })); vCacheSave();
     }
+    vintedCheck.why = settings.vintedOk || a.status === 401 ? "" : `Vinted answered HTTP ${a.status}${a.t && /captcha|datadome|blocked/i.test(a.t) ? " (a robot check)" : ""}`;
     if (!settings.vintedOk) startLog(`Vinted: signed out (HTTP ${a.status})`);
-  } catch (e) { settings.vintedOk = false; startLog("Vinted check failed: " + (e.message || e)); }
+  } catch (e) { settings.vintedOk = false; vintedCheck.why = String(e.message || e); startLog("Vinted check failed: " + vintedCheck.why); }
   settings.vintedAt = Date.now();
   write("settings", settings);
   return settings.vintedOk;
@@ -606,7 +607,9 @@ async function vintedSignIn() {
   const w = new WebView();
   await w.loadURL(vBase() + "/member/signup/select_type?ref_url=%2Fitems%2Fnew");
   await w.present(true);
-  vwv = null;   // a fresh page picks up the new session
+  // Check in the same page you signed in with, back on the Vinted site, so its fresh session is the one asked
+  vwv = w; vwvSite = siteOf(); vChain = Promise.resolve();
+  await Promise.race([w.loadURL(vBase() + "/"), pause(30000)]).catch(() => {});
   const ok = await vintedCheck();
   if (ok) track("vinted_signed_in", { site: siteOf().replace("vinted.", "") });
   return ok;
@@ -1236,7 +1239,7 @@ const safeJSON = x => JSON.stringify(x === undefined ? null : x).replace(/\u2028
 // ---------- UI ----------
 // The WebView is built in main() only, so a widget run never builds one (app-blueprints · widgets, Step 4).
 let wv = null;
-const call = (fn, ...args) => wv ? wv.evaluateJavaScript(`window.${fn} && window.${fn}(${args.map(safeJSON).join(",")})`, false).catch(() => {}) : Promise.resolve();
+const call = (fn, ...args) => wv ? wv.evaluateJavaScript(`window.${fn} && window.${fn}(${args.map(safeJSON).join(",")});\n'ok'`, false).catch(() => {}) : Promise.resolve();
 const toast = msg => call("toast", msg);
 const push = () => call("recv", clientState());
 // Asks the page for something that takes a while (a photo resized or cut out on its canvas); JSON back, with a time limit.
@@ -1249,7 +1252,7 @@ function evc(expr, ms = 30000) {
 }
 async function evcOne(expr, ms) {
   if (!wv) throw new Error("Vintly's window is closed");
-  const js = `Promise.resolve(${expr}).then(r => completion(JSON.stringify(r)), e => completion(JSON.stringify({ error: String(e && e.message || e) })))`;
+  const js = `Promise.resolve(${expr}).then(r => completion(JSON.stringify(r)), e => completion(JSON.stringify({ error: String(e && e.message || e) })));\n'pending'`;   // last value must be plain: WebKit can't hand a Promise back
   const out = await Promise.race([wv.evaluateJavaScript(js, true), pause(ms).then(() => { throw new Error("the page didn't answer in " + ms / 1000 + " s"); })]);
   try { return JSON.parse(out || "null"); } catch (e) { return null; }
 }
@@ -1337,8 +1340,8 @@ async function handle(m) {
     }
 
     // ── Vinted ──
-    case "vsignin": { const ok = await vintedSignIn(); toast(ok ? `Signed in to ${siteOf()}` : `Not signed in to ${siteOf()} yet`); return push(); }
-    case "vcheck": { const ok = await vintedCheck(); toast(ok ? `Signed in to ${siteOf()}` : `Not signed in to ${siteOf()}`); return push(); }
+    case "vsignin": { const ok = await vintedSignIn(); toast(ok ? `Signed in to ${siteOf()}` : vintedCheck.why ? `Couldn't check Vinted: ${vintedCheck.why}` : `Not signed in to ${siteOf()} yet`); return push(); }
+    case "vcheck": { const ok = await vintedCheck(); toast(ok ? `Signed in to ${siteOf()}` : vintedCheck.why ? `Couldn't check Vinted: ${vintedCheck.why}` : `Not signed in to ${siteOf()}`); return push(); }
     case "openvinted": {
       const u = String(m.v || "");
       if (!u.startsWith(vBase() + "/")) return;
