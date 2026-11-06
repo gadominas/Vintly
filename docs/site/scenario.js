@@ -22,6 +22,13 @@ const FX = path.join(__dirname, 'fixtures');
 const img = (f) => fs.readFileSync(path.join(FX, f));
 
 // ───────── What each item is (Claude's answers) ─────────
+// What ✦ AI finds on the web about each sample item (invented shop, real-looking details)
+const SPECS = {
+  jacket: { product: "Levi's Original Trucker Jacket", match: 'exact', heading: 'Techniniai duomenys / Technical details', specs: [
+    { label: 'Medžiaga / Material', value: '100 % medvilnė (džinsas) / 100 % cotton (denim)' }, { label: 'Ilgis nugaroje / Back length', value: '64 cm (M)' },
+    { label: 'Pečių plotis / Shoulder width', value: '46 cm (M)' }, { label: 'Kišenės / Pockets', value: '2 krūtinės, 2 šoninės / 2 chest, 2 side' },
+    { label: 'Užsegimas / Fastening', value: 'metalinės sagos / metal buttons' }, { label: 'Svoris / Weight', value: '≈ 850 g' }] },
+};
 const ITEM = {
   jacket: { what: 'Denim jacket', brand: "Levi's", words: ['Džinsiniai švarkai', 'švarkas', 'denim jacket'], condition: 'very_good', colors: ['BLUE'], materials: ['denim', 'cotton'],
     size: 'M', parcel: 'M', price_new: 95, price_used: 28, why: 'Used Levi\'s jackets in good shape usually go for 25–32 €.',
@@ -128,6 +135,17 @@ function routes(state) {
     const b = req.json() || {}, sys = String(b.system || ''), user = b.messages ? JSON.stringify(b.messages[0].content) : '';
     let text = 'OK';
     if (/sort photos into items/.test(sys)) text = JSON.stringify({ groups: [[1, 2], [3, 4], [5, 6]], names: ['denim jacket', 'white sneakers', 'terracotta teapot'] });
+    else if (/technical details of one second-hand item/.test(sys)) {   // ✦ with web search: a search, its results, then the answer with a citation
+      state.specsAsked = (state.specsAsked || 0) + 1; state.specsTools = b.tools;
+      const k = which(user) || 'jacket', S = SPECS[k] || { product: '', match: 'none', heading: 'Techniniai duomenys / Technical details', specs: [] };
+      const src = { type: 'web_search_result_location', url: `https://www.example-shop.lt/${k}-specs`, title: `${S.product || k} – specifications`, cited_text: 'Specifications', encrypted_index: 'x' };
+      return { json: { id: 'msg', type: 'message', stop_reason: 'end_turn', content: [
+        { type: 'text', text: 'Let me look this product up.' },
+        { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: S.product || k } },
+        { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [{ type: 'web_search_result', url: src.url, title: src.title, encrypted_content: 'x', page_age: null }] },
+        { type: 'text', text: JSON.stringify({ product: S.product, match: S.match, heading: S.heading, specs: S.specs }), citations: [src] }],
+        usage: { input_tokens: 9000, output_tokens: 400, server_tool_use: { web_search_requests: 2 } } } };
+    }
     else if (/experienced seller/.test(sys)) {
       const k = which(user) || state.next || 'jacket', I = ITEM[k];
       text = '```json\n' + JSON.stringify({ what: I.what, brand: I.brand, model: '', category_words: I.words, condition: I.condition, flaws: [], colors: I.colors, materials: I.materials,

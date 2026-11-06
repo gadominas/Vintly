@@ -84,6 +84,18 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   ok(L.packageSizeId === 2, 'parcel size: medium');
   ok(L.price === 21, `price: 26 € (Vinted's optimal) − 20% = ${L.price}`);
   ok(!J.err, 'no error: ' + (J.err || ''));
+  console.log('Technical details');
+  ok(state.specsAsked === 1 && JSON.stringify(state.specsTools) === JSON.stringify([{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }]), "✦ looked the jacket up with Claude's web search tool");
+  ok(J.specs && J.specs.list.length === 6 && J.specs.match === 'exact' && J.specs.via === 'web', 'six technical details, for the exact product');
+  ok(J.specs.sources[0] && J.specs.sources[0].url === 'https://www.example-shop.lt/jacket-specs', 'the cited page is kept as the source');
+  ok(/\n\nTechniniai duomenys \/ Technical details:\n• Medžiaga \/ Material: 100 % medvilnė/.test(L.description) && /• Svoris \/ Weight: ≈ 850 g$/.test(L.description), 'the details close the description, under a heading');
+  ok(/Levi's Original Trucker Jacket/.test(await page.textContent('#itemsheet .specs')) && /✓ At the end of the description/.test(await page.textContent('#itemsheet .specs')), 'the item shows them with where they came from');
+  const usage0 = JSON.parse(emu.files.get(sc.DIR + '/usage.json').toString());
+  ok(usage0.p.anthropic.features.specs.searches === 2, 'the web searches are counted apart from tokens');
+  await page.click('#itemsheet [data-act="specs"]');
+  await until(`!document.querySelector('#itembusy .busybox')`, null, 20000); await sleep(500);
+  const J2 = items().find((x) => x.id === jacket.id);
+  ok(J2.listing.description.split('Techniniai duomenys').length === 2, 'looking up again replaces the block, never repeats it');
   // The cut-out: white around the item, the item's own colour in the middle
   const px = await page.evaluate(async (b64) => {
     const i = new Image(); i.src = 'data:image/jpeg;base64,' + b64; await i.decode();

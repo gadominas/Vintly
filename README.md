@@ -34,6 +34,7 @@ Photograph what you no longer need and Vintly turns the photos into Vinted listi
 - **Photos to items.** Take or pick photos of several things at once; AI sorts them into items, and you can move a photo with two taps.
 - **Clean backgrounds.** An OpenAI image model outlines the item and Vintly cuts your own photo along it onto white, so the item stays exactly as photographed, including everything inside its outline (a screen, a print, dark parts). Or let the model redraw a studio photo (Vinted is told it's AI).
 - **Listings written for you.** Title, description, brand, condition and colours from the photos and your notes, in Lithuanian, English or another Vinted language, with a second language for buyers from abroad and a little humour if you like.
+- **Technical details, looked up.** ✦ AI finds the exact product on the web (or by its barcode or ISBN in free product databases) and adds its dimensions, weight, materials and specs at the end of the description.
 - **Every Vinted field filled.** Category, size, material and the other fields the category asks for, matched against Vinted's own lists, plus the parcel size.
 - **A fair price.** Starts from Vinted's own price suggestion for the item, or the AI's used price, and goes a set share below it, rounded.
 - **You post.** Check everything, change any field, then tap **Post on Vinted** twice; or save a Vinted draft to finish on the website.
@@ -102,6 +103,7 @@ What else you need:
 | Add items | Tap **Take photos** or **Choose photos**; take a few photos of each thing. Or share photos to Vintly from Photos |
 | Fix the sorting | Tap a photo, then the item it belongs to (or **+ A new item**). **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
 | Get a listing | Open an item, add notes if you know something the photos don't show (size, flaws, "never worn"), tap **Prepare**. Vintly cleans the photos, writes the listing, fills Vinted's fields and sets a price |
+| Get the technical details | They're looked up while preparing and added at the end of the description. On the item, **Look up again** repeats it, **Add to the description** puts them in a description you wrote yourself, and the sources open in Safari |
 | Change anything | Tap a field. Your changes stay when you prepare again |
 | Choose photos | Under each photo pick **Clean** or **Original**, move it with **‹ ›**, or remove it |
 | Post | Tap **Post on Vinted**, then tap again to confirm. **Save as a Vinted draft** sends it to your drafts instead |
@@ -153,9 +155,9 @@ Lock Screen widgets are added the same way under **Customize › Lock Screen**. 
 
 ## AI
 
-AI sorts new photos into items, writes the title and description, picks the brand, condition, colours, category and Vinted's other fields from their lists, and estimates a used price. An OpenAI image model (`gpt-image-1` by default) outlines the item for cleaning.
+AI sorts new photos into items, writes the title and description, picks the brand, condition, colours, category and Vinted's other fields from their lists, and estimates a used price. With your provider's web search it looks up the exact product's technical details (Claude's `web_search` tool or OpenAI's `web_search` in the Responses API; a few searches per item, billed by the provider on top of tokens). An OpenAI image model (`gpt-image-1` by default) outlines the item for cleaning.
 
-- **Your own key.** Open **Settings › AI settings**, add a [Claude](https://console.anthropic.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) key, pick any model the key can use and tap **Test connection**. **What AI does** turns sorting and cleaning on or off and picks the image model.
+- **Your own key.** Open **Settings › AI settings**, add a [Claude](https://console.anthropic.com/settings/keys) or [OpenAI](https://platform.openai.com/api-keys) key, pick any model the key can use and tap **Test connection**. **What AI does** turns sorting, the technical details lookup and cleaning on or off and picks the image model.
 - **Kept safe.** The key is typed into a native iOS prompt, stored in the iOS Keychain and sent only to its own provider. The app's page never sees it.
 - **You see the cost.** **AI settings › Token usage** shows tokens per day, feature and model. API use is billed by the provider, separately from any chat subscription.
 - **Optional.** Without a key you group the photos yourself, they're posted as taken, and you write the listing; **Load Vinted's fields** still loads the category's fields and Vinted's price suggestion.
@@ -182,7 +184,7 @@ Vintly checks this repository for a new version each time it opens. When one is 
 ## Privacy and security
 
 - Your items, photos and settings live in Vintly's folder in iCloud Drive › Scriptable (on the iPhone when iCloud Drive is off). Your Vinted sign-in is Scriptable's web session, like a browser's; Vintly never sees or stores your password.
-- Photos go to your AI provider only when you tap **Prepare** or sort new photos, and to Vinted when you post. Listings go to Vinted only when you tap **Post** or **Save draft**.
+- Photos go to your AI provider only when you tap **Prepare** or sort new photos, and to Vinted when you post. For the technical details, the item's name, printed text and barcode go to your AI provider, which searches the web; a barcode or ISBN alone goes to [Open Library](https://openlibrary.org) or [UPCitemdb](https://www.upcitemdb.com). Listings go to Vinted only when you tap **Post** or **Save draft**.
 - Your Vinted messages and listings are read from Vinted inside Vintly and kept only on this iPhone, so they show at once next time. Message texts never go to AI, to the widget, or anywhere else; the widget shows who wrote and about which item.
 - AI keys stay in the iOS Keychain and are only sent to their own provider.
 - The update check only downloads `releases.json` from this repository.
