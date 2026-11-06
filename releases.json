@@ -4,6 +4,34 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.3.0",
+      "date": "2026-11-06",
+      "title": "Pull to refresh",
+      "highlights": [
+        {
+          "icon": "⬇️",
+          "title": "Pull to refresh",
+          "text": "Drag the list down from the top to check Vinted for new messages and listing changes."
+        },
+        {
+          "icon": "💬",
+          "title": "New messages, right away",
+          "text": "The unread count, your conversations and your listings all update in one pull."
+        },
+        {
+          "icon": "🔑",
+          "title": "Sign-in checked too",
+          "text": "If your Vinted session ended, the pull says so instead of showing old numbers."
+        }
+      ],
+      "changes": [
+        "Pull the main list down from the very top: past the line it says Release to refresh, then a spinner shows while Vintly checks Vinted",
+        "One pull refreshes your messages, the unread count and your listings, on any tab; the widget is updated too",
+        "If the sign-in is more than an hour old or ended, the pull checks it first and tells you when you need to sign in again",
+        "The Refresh buttons stay for when a gesture is awkward"
+      ]
+    },
+    {
       "version": "1.2.0",
       "date": "2026-11-06",
       "title": "See what's happening",

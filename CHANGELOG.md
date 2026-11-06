@@ -2,6 +2,19 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.3.0 (2026-11-06): Pull to refresh
+
+- ⬇️ **Pull to refresh**: Drag the list down from the top to check Vinted for new messages and listing changes.
+- 💬 **New messages, right away**: The unread count, your conversations and your listings all update in one pull.
+- 🔑 **Sign-in checked too**: If your Vinted session ended, the pull says so instead of showing old numbers.
+
+**Changes**
+
+- Pull the main list down from the very top: past the line it says Release to refresh, then a spinner shows while Vintly checks Vinted
+- One pull refreshes your messages, the unread count and your listings, on any tab; the widget is updated too
+- If the sign-in is more than an hour old or ended, the pull checks it first and tells you when you need to sign in again
+- The Refresh buttons stay for when a gesture is awkward
+
 ## 1.2.0 (2026-11-06): See what's happening
 
 - 🩺 **Vinted's errors, in full**: Each problem Vinted reports, by field, with what it sent back and a copy button.
