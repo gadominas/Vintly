@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -588,9 +588,35 @@ async function vjsOne(body, ms) {
   if (!o.ok) throw new Error(o.e || "Vinted's page failed");
   return o.r;
 }
+// Vinted's answer to a refused request: its headline ("Rasta klaidų") and each problem, with the field in plain words.
+const V_FIELDS = { title: "Title", description: "Description", price: "Price", currency: "Currency", brand_id: "Brand", brand: "Brand", catalog_id: "Category",
+  size_id: "Size", status_id: "Condition", color_ids: "Colours", color1_id: "Colour", color2_id: "Second colour", package_size_id: "Parcel size",
+  assigned_photos: "Photos", photos: "Photos", photo: "Photos", item_attributes: "Category fields", isbn: "ISBN", manufacturer: "Manufacturer",
+  manufacturer_labelling: "Manufacturer labelling", measurement_length: "Length", measurement_width: "Width", shipment_prices: "Shipping", parcel: "Parcel",
+  upload_session_id: "Upload session", temp_uuid: "Upload session", video_game_rating_id: "Age rating", model: "Model", is_unisex: "Unisex" };
+function vProblems(j, depth = 0) {
+  const out = [];
+  if (!j || typeof j !== "object" || depth > 3) return out;
+  const add = (field, text) => {
+    const f = String(field || ""), key = f.replace(/^item\.|^draft\./, "").replace(/[\[.].*$/, "");
+    if (!f && !text) return;
+    out.push({ field: f, label: V_FIELDS[key] || (key ? key.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()) : ""), text: String(text == null ? "" : text).trim() });
+  };
+  const e = j.errors;
+  if (Array.isArray(e)) e.forEach(x => typeof x === "string" ? add("", x) : x && add(x.field || x.attribute || x.name || x.code, x.value || x.message || x.title || x.text || x.description || ""));
+  else if (e && typeof e === "object") Object.entries(e).forEach(([k, v]) => [].concat(v).forEach(t => add(k, typeof t === "string" ? t : (t && (t.message || t.value)) || JSON.stringify(t))));
+  if (j.payload && typeof j.payload === "object") out.push(...vProblems(j.payload, depth + 1));
+  if (j.error && typeof j.error === "object") out.push(...vProblems(j.error, depth + 1));
+  return out;
+}
 const vErr = (a, what) => {
-  const j = a && a.j, m = j && (j.message || (j.errors && j.errors.map(e => [e.field, e.value].filter(Boolean).join(": ")).join("; ")));
-  return new Error(`${what}: ${m || ("HTTP " + (a ? a.status : "?") + (a && a.t ? " " + a.t.slice(0, 80) : ""))}`);
+  const j = a && a.j, probs = vProblems(j), head = j && typeof j.message === "string" ? j.message : "";
+  const text = probs.length ? probs.map(p => (p.label ? p.label + ": " : "") + (p.text || "not accepted")).join("; ")
+    : head || ("HTTP " + (a ? a.status : "?") + (a && a.t ? " " + a.t.slice(0, 80) : ""));
+  const err = new Error(`${what}: ${text}`);
+  err.vinted = { what, message: head, code: j ? String(j.message_code || j.code || "") : "", status: a ? a.status : 0, problems: probs,
+    raw: clip(j ? JSON.stringify(j, null, 1) : String((a && a.t) || ""), 2000) };
+  return err;
 };
 const vSignedOut = a => a && (a.status === 401 || a.status === 403);
 
@@ -734,13 +760,13 @@ async function vPost(it, asDraft, onStep) {
   const photos = it.photos.slice(0, cfg("maxPhotos"));
   const assigned = [];
   for (let i = 0; i < photos.length; i++) {
-    onStep(`Uploading photo ${i + 1} of ${photos.length}`, (i + 0.2) / (photos.length + 1));
     const ph = photos[i];
+    onStep(`Uploading photo ${i + 1} of ${photos.length}`, (i + 0.2) / (photos.length + 1), ph.id, "upload");
     const b64 = await decorate(await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : "")), it, i);
     const up = await vUpload(b64, sessionId);
     assigned.push({ id: up.id, orientation: 0 });
   }
-  onStep(asDraft ? "Saving the draft" : "Posting", photos.length / (photos.length + 1));
+  onStep(asDraft ? "Saving the draft" : "Posting", photos.length / (photos.length + 1), [], "");
   const attrs = [];
   if (L.conditionId) attrs.push({ code: "condition", ids: [+L.conditionId] });
   for (const [code, ids] of Object.entries(L.attrs || {})) if (code !== "condition" && ids && ids.length) attrs.push({ code, ids: ids.map(Number) });
@@ -756,7 +782,11 @@ async function vPost(it, asDraft, onStep) {
   const payload = asDraft ? { draft: item, parcel: null, upload_session_id: sessionId } : { item, push_up: false, parcel: null, upload_session_id: sessionId };
   const a = await vjs(`return await window.__vt.api(${JSON.stringify(path)}, { method: "POST", headers: { "X-Upload-Form": "true" }, body: ${JSON.stringify(payload)} });`);
   if (vSignedOut(a)) { settings.vintedOk = false; throw new Error("You're signed out of Vinted. Sign in again in Settings › Vinted."); }
-  if (a.status < 200 || a.status > 299 || !a.j || (a.j.code && a.j.code !== 0)) throw vErr(a, asDraft ? "Vinted didn't save the draft" : "Vinted didn't take the item");
+  if (a.status < 200 || a.status > 299 || !a.j || (a.j.code && a.j.code !== 0)) {
+    const e = vErr(a, asDraft ? "Vinted didn't save the draft" : "Vinted didn't take the item");
+    e.vinted.sent = clip(JSON.stringify(Object.assign({}, item, { description: clip(item.description || "", 120) }), null, 1), 2500);   // what Vintly sent, for the details
+    throw e;
+  }
   const id = (a.j.item && a.j.item.id) || (a.j.draft && a.j.draft.id) || a.j.id || null;
   return { id, url: id ? vBase() + "/items/" + id + (asDraft ? "/edit" : "") : vBase() + "/member/items" };
 }
@@ -1200,9 +1230,22 @@ async function loadCatFields(it) {
 
 // ---------- ✦ prepare: clean, read, fill ----------
 const busy = {};   // item id → { steps: [{ t, done }], p } while preparing or posting
+// The steps of a long job for the page: each step's text, the overall progress (0…1, never going back), the photos
+// being worked on (ph) and how (phase: clean, read, match, upload). Inside a stage, steps without a number of their
+// own move the bar part of the way towards the stage's end.
 function stepper(id) {
-  const b = busy[id] = busy[id] || { steps: [], p: 0 };
-  return (t, p) => { const last = b.steps[b.steps.length - 1]; if (last) last.done = true; b.steps.push({ t, done: false }); if (p != null) b.p = p; call("onBusy", id, b); };
+  const b = busy[id] = busy[id] || { steps: [], p: 0, t0: Date.now(), ph: [], phase: "" };
+  let lo = 0, hi = 1, k = 0;
+  const step = (t, p, ph, phase) => {
+    const last = b.steps[b.steps.length - 1]; if (last) last.done = true;
+    b.steps.push({ t, done: false });
+    if (p != null) b.p = Math.max(b.p, lo + (hi - lo) * p); else { k++; b.p = Math.max(b.p, lo + (hi - lo) * (1 - Math.pow(0.55, k))); }
+    if (ph !== undefined) { b.ph = [].concat(ph || []); b.phase = phase || ""; }
+    call("onBusy", id, b);
+  };
+  step.stage = (a, z) => { lo = a; hi = z; k = 0; b.p = Math.max(b.p, a); };
+  step.focus = (ph, phase) => { b.ph = [].concat(ph || []); b.phase = phase || ""; };
+  return step;
 }
 async function prepare(id, opts = {}) {
   const it = byId(id);
@@ -1210,23 +1253,29 @@ async function prepare(id, opts = {}) {
   const step = stepper(id);
   const t0 = Date.now();
   let cleaned = 0, failedClean = 0;
-  it.err = "";
+  it.err = ""; it.errInfo = null;
+  // The bar's stages, by how long each part takes: about 3 per photo cleaned, 3 for reading, 4 for Vinted's fields
+  const doClean = opts.clean !== false && canClean(), nClean = doClean ? it.photos.filter(p => !p.clean || opts.reclean).length : 0;
+  const doRead = !!aiKey() && opts.read !== false, total = nClean * 3 + (doRead ? 3 : 0) + 4;
+  const endClean = nClean * 3 / total, endRead = endClean + (doRead ? 3 / total : 0);
   try {
-    if (opts.clean !== false && canClean()) {
+    if (doClean) {
       const todo = it.photos.filter(p => !p.clean || opts.reclean);
+      step.stage(0, endClean);
       for (let i = 0; i < todo.length; i++) {
-        step(`✦ Cleaning photo ${i + 1} of ${todo.length}`);
+        step(`✦ Cleaning photo ${i + 1} of ${todo.length}`, i / todo.length, todo[i].id, "clean");
         try { await cleanPhoto(it, todo[i]); cleaned++; write("items", items); push(); }
         catch (e) { failedClean++; todo[i].cleanErr = clip(e.message || e, 120); startLog("cleanup: " + (e.message || e)); }
       }
       if (todo.length) track("photos_cleaned", { photos: todo.length, ok: cleaned, style: settings.cleanStyle === "studio" ? "studio" : "keep" });
     }
-    if (aiKey() && opts.read !== false) { step("✦ Reading the photos"); await analyse(it); write("items", items); push(); }
+    if (doRead) { step.stage(endClean, endRead); step("✦ Reading the photos", 0, it.photos.slice(0, cfg("aiPhotos")).map(p => p.id), "read"); await analyse(it); write("items", items); push(); }
+    step.stage(endRead, 0.98); step.focus(it.photos.slice(0, 1).map(p => p.id), "match");
     if (settings.vintedOk || await vintedCheck()) await fitVinted(it, step);
     else it.err = "Sign in to Vinted (Settings › Vinted) to fill in Vinted's fields.";
     it.status = "ready";
     track("item_prepared", { provider: aiKey() ? settings.aiProvider : "none", photos: it.photos.length, vinted: !!it.fitAt, seconds: Math.round((Date.now() - t0) / 1000) });
-  } catch (e) { it.err = clip(e.message || e, 200); startLog("prepare: " + it.err); }
+  } catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; startLog("prepare: " + it.err); }
   delete busy[id];
   write("items", items); push(); saveWidget(widgetSnapshot());
   if (failedClean) toast(`${failedClean} photo${failedClean === 1 ? "" : "s"} couldn't be cleaned; the originals are kept`);
@@ -1236,13 +1285,15 @@ async function postItem(id, asDraft) {
   const it = byId(id);
   if (!it || busy[id]) return;
   const step = stepper(id);
-  it.err = "";
+  it.err = ""; it.errInfo = null;
   try {
     if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted).");
-    if (!it.fitAt || !(it.opts && it.opts.attrs)) { await fitVinted(it, step); write("items", items); }
+    let s0 = 0;
+    if (!it.fitAt || !(it.opts && it.opts.attrs)) { step.stage(0, 0.15); step.focus(it.photos.slice(0, 1).map(p => p.id), "match"); await fitVinted(it, step); write("items", items); s0 = 0.15; }
+    step.stage(s0, 1);
     const miss = missingFor(it);
     if (miss.length) throw new Error("Still needed: " + miss.join(", "));
-    const r = await vPost(it, asDraft, (t, p) => step(t, p));
+    const r = await vPost(it, asDraft, (t, p, ph, phase) => step(t, p, ph, phase));
     it.vinted = { id: r.id, url: r.url, at: Date.now(), draft: !!asDraft };
     it.status = "posted";
     it.cover = thumbURL(it.id, it.photos[0].id, it.photos[0].use === "clean" && it.photos[0].clean ? "ct" : "t");
@@ -1250,7 +1301,7 @@ async function postItem(id, asDraft) {
     track("item_posted", { photos: it.photos.length, mode: asDraft ? "draft" : "post", cleaned: it.photos.filter(p => p.use === "clean" && p.clean).length, decor: dec.stickers ? (dec.qr ? "both" : "stickers") : dec.qr ? "qr" : "none" });
     if (settings.removePhotosAfter) { removeItemFiles(it.id); it.photos = it.photos.map(p => ({ id: p.id, w: p.w, h: p.h, gone: true })); }
     toast(asDraft ? "Saved as a draft on Vinted" : "Posted on Vinted 🎉");
-  } catch (e) { it.err = clip(e.message || e, 240); startLog("post: " + it.err); }
+  } catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; startLog("post: " + it.err + (e.vinted ? "\n" + clip(e.vinted.raw, 600) : "")); }
   delete busy[id];
   write("items", items); push(); saveWidget(widgetSnapshot());
 }
@@ -1334,7 +1385,7 @@ function inviteIfDue() {
 function itemView(it) {
   const posted = it.status === "posted";
   return {
-    id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", err: it.err || "",
+    id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null,
     listing: it.listing || {}, ai: it.ai || null, vinted: it.vinted || null, cover: it.cover || "", fitAt: it.fitAt || 0,
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
@@ -1599,11 +1650,18 @@ async function handle(m) {
     }
     case "prepare": return prepare(m.id, { reclean: !!m.reclean });
     case "clean": return prepare(m.id, { reclean: true, read: false });
+    case "copyerr": {   // the whole error for a message to whoever helps you (or to fix it on Vinted)
+      if (!it || !it.err) return;
+      const E = it.errInfo || {};
+      Pasteboard.copyString([`Vintly ${VERSION} · ${siteOf()} · ${new Date().toISOString()}`, it.err,
+        E.raw ? "Vinted answered (HTTP " + E.status + "):\n" + E.raw : "", E.sent ? "Vintly sent:\n" + E.sent : ""].filter(Boolean).join("\n\n"));
+      return toast("The details are copied");
+    }
     case "fill": {
       if (!it || busy[it.id]) return;
       const step = stepper(it.id);
-      try { if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted)."); await fitVinted(it, step); it.err = ""; }
-      catch (e) { it.err = clip(e.message || e, 200); }
+      try { if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted)."); await fitVinted(it, step); it.err = ""; it.errInfo = null; }
+      catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; }
       delete busy[it.id]; write("items", items); return push();
     }
     case "post": return postItem(m.id, !!m.draft);
@@ -1656,7 +1714,7 @@ function clientApp() {
   let S = window.__INIT;
   const look = { theme: S.settings.theme || "auto", density: S.settings.density || "comfortable", font: S.settings.font || "sans", textSize: +S.settings.textSize || 1 };
   let tab = ["posted", "msgs"].includes(S.settings.tab) ? S.settings.tab : "todo";
-  let vOpen = null, convOpen = false, replyDraft = "";   // a Vinted listing's sheet, the conversation sheet
+  let vOpen = null, convOpen = false, replyDraft = "", lastErr = "";   // a Vinted listing's sheet, the conversation sheet
   let openId = null, cfgOpen = false, cfgArmed = false, aiOpen = false, aiArmed = null, armed = null, batchOpen = !!S.batch;
   let importTarget = "", tray = 0, importing = 0, panel = null;   // panel: "cat" or "brand", open inside the item sheet
   let catRes = null, brandRes = null, brandQ = "", catQ = "";
@@ -1775,7 +1833,12 @@ function clientApp() {
     clearTimeout(window.__tt); window.__tt = setTimeout(() => t.classList.remove("on"), 3600);
   };
   window.openItem = id => { openId = id; panel = null; renderItem(); $("#itemsheet").scrollTop = 0; };
-  window.onBusy = (id, b) => { const x = byId(id); if (x) { x.busy = b; render(); if (openId === id) renderItem(); } };
+  window.onBusy = (id, b) => {
+    const x = byId(id); if (!x) return;
+    x.busy = b; render();
+    if (openId !== id) return;
+    if (!patchBusy($("#itembusy"), b, x)) renderItem(); else markScan(b);
+  };
   window.onImported = n => { importing = 0; renderTray(); if (!n) window.toast("No photos came in. Try again."); };
   window.onCats = (id, list) => { if (openId === id) { catRes = list; renderItem(); } };
   window.onBrands = (id, list) => { if (openId === id) { brandRes = list; renderItem(); } };
@@ -2096,7 +2159,7 @@ function clientApp() {
     return `<button class="card" data-act="open" data-v="${x.id}">
       <span class="thumbs">${th.length ? th.map(p => `<img src="${thumb(p)}" alt="">`).join("") : x.cover ? `<img src="${x.cover}" alt="">` : `<i class="noimg"></i>`}${x.photos.length > 3 ? `<em>+${x.photos.length - 3}</em>` : ""}</span>
       <span class="c-b"><b class="c-t">${esc(title)}</b><small class="muted">${x.status === "posted" && x.vinted ? (x.vinted.draft ? "Saved " : "Posted ") + rel(x.vinted.at) : L.catalogPath ? esc(L.catalogPath.split(" › ").slice(-1)[0]) : "Added " + rel(x.created)}</small>
-        <span class="chip st-${k}">${st}</span></span>
+        <span class="chip st-${k}">${st}${x.busy ? " " + Math.round((x.busy.p || 0) * 100) + "%" : ""}</span>${x.busy ? `<span class="pbar mini"><i style="width:${Math.max(3, Math.round((x.busy.p || 0) * 100))}%"></i></span>` : ""}</span>
       <span class="c-p">${L.price ? money(L.price) : ""}</span></button>`;
   }
   // ---- your Vinted account: listings and messages ----
@@ -2228,14 +2291,65 @@ function clientApp() {
     if (parts.length) parts.push(`yours is ${S.cfg.priceBelowPct}% under`);
     return parts.join(" · ");
   }
-  function busyHTML(b) {
-    return `<div class="steps">${b.steps.map(s => `<div class="step ${s.done ? "done" : ""}">${s.done ? "✓" : `<span class="busy-dot"></span>`}<span>${esc(s.t)}</span></div>`).join("")}
-      ${b.p ? `<div class="bar"><i style="width:${Math.round(b.p * 100)}%"></i></div>` : ""}</div>`;
+  // ---- a long job: the photo being worked on (with a scan line), what's happening, an animated bar, the steps so far ----
+  const PHASE = { clean: "Cutting out", read: "✦ Reading", match: "Matching on Vinted", upload: "Uploading" };
+  const busyPhotos = (b, x) => (b.ph || []).map(id => x && x.photos.find(p => p.id === id)).filter(p => p && thumb(p));
+  function bbPhHTML(b, x) {
+    const ph = busyPhotos(b, x);
+    return ph.length ? `<div class="bb-ph ${esc(b.phase || "")} n${Math.min(3, ph.length)}" data-key="${esc((b.ph || []).join(",") + b.phase)}">${ph.slice(0, 3).map(p => `<img src="${thumb(p)}" alt="">`).join("")}<i class="scanl"></i>${b.phase ? `<em>${PHASE[b.phase] || ""}</em>` : ""}</div>`
+      : `<div class="bb-ph idle" data-key=""><span class="orb"></span></div>`;
+  }
+  function stepsHTML(b) {
+    return b.steps.map(s => `<div class="step ${s.done ? "done" : ""}">${s.done ? "✓" : `<span class="busy-dot"></span>`}<span>${esc(s.t)}</span></div>`).join("");
+  }
+  function busyHTML(b, x) {
+    const pct = Math.round((b.p || 0) * 100), cur = b.steps[b.steps.length - 1];
+    return `<div class="busybox" role="status" aria-live="polite">
+      <div class="bb-top">${bbPhHTML(b, x)}
+        <div class="bb-txt"><b class="bb-now">${esc(cur ? cur.t : "Working…")}</b><small class="muted"><span class="bb-pct">${pct}%</span> · <span class="bb-el" data-t0="${b.t0 || Date.now()}">${elapsed(b.t0)}</span></small></div></div>
+      <div class="pbar"><i style="width:${Math.max(3, pct)}%"></i></div>
+      <div class="steps">${stepsHTML(b)}</div></div>`;
+  }
+  const elapsed = t0 => { const s = Math.max(0, Math.round((Date.now() - (t0 || Date.now())) / 1000)); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
+  setInterval(() => document.querySelectorAll(".bb-el").forEach(e => { e.textContent = elapsed(+e.dataset.t0); }), 1000);
+  // Updates a busy box in place, so the bar glides from where it was instead of starting over
+  function patchBusy(el, b, x) {
+    const box = el && el.querySelector(".busybox");
+    if (!box) return false;
+    const pct = Math.round((b.p || 0) * 100), cur = b.steps[b.steps.length - 1];
+    box.querySelector(".pbar i").style.width = Math.max(3, pct) + "%";
+    box.querySelector(".bb-pct").textContent = pct + "%";
+    box.querySelector(".bb-now").textContent = cur ? cur.t : "Working…";
+    box.querySelector(".steps").innerHTML = stepsHTML(b);
+    const ph = box.querySelector(".bb-ph"), key = (b.ph || []).join(",") + (b.phase || "");
+    if (ph && ph.dataset.key !== (busyPhotos(b, x).length ? key : "")) ph.outerHTML = bbPhHTML(b, x);
+    return true;
+  }
+  // The photos in the strip: the ones being worked on get the scan line
+  function markScan(b) {
+    document.querySelectorAll("#itemsheet .ph[data-p]").forEach(e => {
+      const on = !!b && (b.ph || []).includes(e.dataset.p);
+      e.classList.toggle("scan", on); ["clean", "read", "match", "upload"].forEach(k => e.classList.toggle("ph-" + k, on && b.phase === k));
+    });
+  }
+  // A refused request, in full: Vinted's headline, each problem by field, what it sent back, and a copy button
+  function errHTML(x) {
+    const E = x.errInfo;
+    if (!E) return `<div class="errbox" role="alert"><b>⚠️ Something went wrong</b><p>${esc(x.err)}</p><div class="eb-btns"><button class="sm" data-act="copyerr">Copy the details</button></div></div>`;
+    const probs = E.problems || [];
+    return `<div class="errbox" role="alert"><b>⚠️ ${esc(E.what || "Vinted said no")}</b>
+      <small class="muted">Vinted said: “${esc(E.message || "no reason given")}”${E.code ? " · " + esc(E.code) : ""} · HTTP ${E.status}</small>
+      ${probs.length ? `<ul class="eb-list">${probs.map(p => `<li>${p.label ? `<b>${esc(p.label)}</b>` : ""}<span>${esc(p.text || "not accepted")}</span>${p.field && p.field !== p.label ? `<code>${esc(p.field)}</code>` : ""}</li>`).join("")}</ul>`
+        : `<p>Vinted didn't say which field it didn't like. What it sent back is below; Copy the details and send them along if you need help.</p>`}
+      <details><summary>What Vinted sent back</summary><pre>${esc(E.raw || "")}</pre></details>
+      ${E.sent ? `<details><summary>What Vintly sent</summary><pre>${esc(E.sent)}</pre></details>` : ""}
+      <div class="eb-btns"><button class="sm" data-act="copyerr">Copy the details</button></div></div>`;
   }
   function photosHTML(x) {
     if (x.status === "posted") return x.cover ? `<div class="strip"><div class="ph"><img src="${x.cover}" alt=""></div></div>` : "";
-    return `<div class="strip">${x.photos.map((p, i) => `<div class="ph">
-        <img src="${thumb(p) || ""}" alt="Photo ${i + 1}">${i === 0 ? `<span class="ph-main">Main</span>` : ""}
+    const b = x.busy, on = p => !!b && (b.ph || []).includes(p.id);
+    return `<div class="strip">${x.photos.map((p, i) => `<div class="ph ${on(p) ? "scan ph-" + esc(b.phase || "") : ""}" data-p="${p.id}">
+        <img src="${thumb(p) || ""}" alt="Photo ${i + 1}"><i class="scanl"></i>${i === 0 ? `<span class="ph-main">Main</span>` : ""}
         ${p.clean ? `<div class="seg mini"><button class="${p.use === "clean" ? "on" : ""}" data-act="phuse" data-p="${p.id}" data-v="clean">${p.studio ? "✦ Studio" : "Clean"}</button><button class="${p.use !== "clean" ? "on" : ""}" data-act="phuse" data-p="${p.id}" data-v="orig">Original</button></div>`
           : p.err ? `<small class="ph-err" title="${esc(p.err)}">Not cleaned</small>` : ""}
         <div class="ph-tools"><button data-act="phmove" data-p="${p.id}" data-v="-1" aria-label="Earlier" ${i ? "" : "disabled"}>‹</button>
@@ -2285,7 +2399,7 @@ function clientApp() {
     el.classList.toggle("open", !!x); lockBody();
     if (!x) return;
     const ae = document.activeElement;
-    if (ae && el.contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) { const b = $("#itembusy"); if (b) b.innerHTML = x.busy ? busyHTML(x.busy) : ""; return; }   // never rebuild under your typing
+    if (ae && el.contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) { const b = $("#itembusy"); if (b && !(x.busy && patchBusy(b, x.busy, x))) b.innerHTML = x.busy ? busyHTML(x.busy, x) : ""; markScan(x.busy); return; }   // never rebuild under your typing
     const L = x.listing || {}, posted2 = x.status === "posted", miss = x.missing;
     const canPost = !x.busy && S.vinted.ok && !miss.length;
     el.innerHTML = `<div class="sh-head"><h2>${esc(clip2(L.title || (x.ai && x.ai.what) || x.hint || "New item", 26))}</h2><button class="link" data-act="close">Done</button></div><div class="sh-body">
@@ -2297,11 +2411,12 @@ function clientApp() {
         <small class="note center">${S.settings.canClean ? "Cleans the photos, then " : ""}reads the photos, writes the listing and fills Vinted's fields${x.ai ? ". Fields you changed are kept" : ""}.</small>`
         : `<button class="sm wide" data-act="fill" ${x.busy || !S.vinted.ok ? "disabled" : ""}>Load Vinted's fields</button><small class="note center"><span class="badge-ex">no AI</span> Fill in the listing yourself, or add a key in Settings › AI settings.</small>`}
       ${S.settings.canClean && x.photos.some(p => p.clean) && !x.busy ? `<button class="link small block" data-act="reclean">Clean the photos again</button>` : ""}`}
-      <div id="itembusy">${x.busy ? busyHTML(x.busy) : ""}</div>
-      ${x.err ? `<p class="err">${esc(x.err)}</p>` : ""}
+      <div id="itembusy">${x.busy ? busyHTML(x.busy, x) : ""}</div>
+      ${x.err && !x.busy ? errHTML(x) : ""}
       ${x.ai ? `<p class="ailbl"><span class="badge-ai">✦ AI listing by ${esc(x.ai.by)}</span>${x.ai.confidence && x.ai.confidence < 0.6 ? ` <span class="muted small">not sure; check it</span>` : ""}${x.ai.flaws && x.ai.flaws.length ? `<small class="muted">Wear seen: ${esc(x.ai.flaws.join("; "))}</small>` : ""}</p>` : ""}
       ${posted2 ? `<p class="hint">${esc(L.title || "")} · ${money(L.price)}</p>` : fieldsHTML(x)}
       ${posted2 ? "" : `${miss.length ? `<p class="miss">Still needed: ${esc(miss.join(", "))}</p>` : ""}
+      ${x.err && !x.busy ? `<button class="err-jump" data-act="toerr">⚠️ ${esc(x.errInfo ? x.errInfo.what : "It didn't work")}: ${x.errInfo && x.errInfo.problems && x.errInfo.problems.length ? x.errInfo.problems.length + " problem" + (x.errInfo.problems.length === 1 ? "" : "s") : "see why"} ↑</button>` : ""}
       <button class="primary wide post ${armed === "post" + x.id ? "armed" : ""}" data-act="post" ${canPost ? "" : "disabled"}>${armed === "post" + x.id ? "Tap again to post on Vinted" : "Post on Vinted"}</button>
       <button class="sm wide" data-act="draft" ${!x.busy && S.vinted.ok && L.title && x.photos.length ? "" : "disabled"}>Save as a Vinted draft</button>
       ${S.vinted.ok ? "" : `<p class="note center">Posting needs you signed in to Vinted. <button class="link small" data-act="vsignin">Sign in</button></p>`}`}
@@ -2309,6 +2424,10 @@ function clientApp() {
       ${posted2 ? `<p class="note center">Removing it here doesn't touch the listing on Vinted.</p>` : ""}
     </div>`;
     el.scrollTop = keep;
+    // A new error: bring it into view (you were probably down at the Post button)
+    const ek = x.err && !x.busy ? x.id + "|" + x.err : "";
+    if (ek && ek !== lastErr) { const eb = el.querySelector(".errbox"); if (eb) eb.scrollIntoView({ block: "center" }); }   // at once: a smooth scroll would be cut short by the next re-render
+    lastErr = ek;
   }
   const clip2 = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
@@ -2512,6 +2631,8 @@ function clientApp() {
       case "draft": send("post", { id: openId, draft: true }); break;
       case "delitem": if (armed === "del" + openId) { armed = null; const id = openId; openId = null; send("delitem", { id }); renderItem(); } else arm2("del" + openId, renderItem); break;
       case "openvinted": send("openvinted", { v }); break;
+      case "copyerr": send("copyerr", { id: openId }); break;
+      case "toerr": { const eb = $("#itemsheet .errbox"); if (eb) eb.scrollIntoView({ block: "center", behavior: "smooth" }); break; }
       case "acctrefresh": send("acctrefresh", { v }); break;
       case "vopen": vOpen = +v; armed = null; renderVItem(); $("#vsheet").scrollTop = 0; break;
       case "vclose": vOpen = null; renderVItem(); break;
@@ -2825,6 +2946,59 @@ textarea.fin{resize:vertical}
 .step{display:flex;align-items:center;gap:8px;font-size:calc(14px * var(--ts));color:var(--ink);padding:3px 0}
 .step.done{color:var(--muted)}
 .bar{height:5px;border-radius:3px;background:var(--rule);margin-top:8px;overflow:hidden}
+/* A long job: the photo being worked on with a scan line, what's happening, an animated bar, the steps */
+.busybox{margin:14px 0 0;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:12px;box-shadow:0 0 0 1px rgba(45,212,191,.08),0 8px 26px rgba(15,161,146,.12)}
+.busybox .steps{margin:8px 0 0;border:0;padding:0;background:none;max-height:150px;overflow-y:auto}
+.bb-top{display:flex;gap:12px;align-items:center}
+.bb-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.bb-txt b{font-size:calc(16px * var(--ts));line-height:1.25}
+.bb-pct{font-weight:700;color:var(--signal);font-variant-numeric:tabular-nums}
+.bb-ph{position:relative;flex:none;width:72px;height:92px;border-radius:12px;overflow:hidden;background:var(--rule)}
+.bb-ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;animation:bbBreathe 2.4s ease-in-out infinite}
+.bb-ph.n2 img:first-child,.bb-ph.n3 img:first-child{transform:rotate(-7deg) scale(.86);opacity:.75}
+.bb-ph.n3 img:nth-child(2){transform:rotate(6deg) scale(.86);opacity:.85}
+.bb-ph em{position:absolute;left:0;right:0;bottom:0;font-style:normal;font-size:calc(9.5px * var(--ts));font-weight:700;text-align:center;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.65));padding:10px 2px 4px;letter-spacing:.02em}
+.bb-ph.idle{display:flex;align-items:center;justify-content:center}
+.orb{width:30px;height:30px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#5EEAD4,var(--signal));animation:orb 1.2s ease-in-out infinite alternate;box-shadow:0 0 18px rgba(45,212,191,.6)}
+.scanl{display:none;position:absolute;left:0;right:0;top:0;height:34%;pointer-events:none;background:linear-gradient(180deg,rgba(45,212,191,0),rgba(45,212,191,.55) 70%,#5EEAD4 72%,rgba(45,212,191,0) 74%);animation:scanY 1.4s cubic-bezier(.45,0,.55,1) infinite alternate}
+.bb-ph .scanl{display:block}
+.bb-ph.read .scanl,.ph.ph-read .scanl{background:linear-gradient(180deg,rgba(251,191,36,0),rgba(251,191,36,.5) 70%,#FDE68A 72%,rgba(251,191,36,0) 74%)}
+.bb-ph.upload .scanl,.ph.ph-upload .scanl{animation:scanUp 1s linear infinite;background:linear-gradient(0deg,rgba(96,165,250,0),rgba(96,165,250,.55) 70%,#BFDBFE 72%,rgba(96,165,250,0) 74%)}
+.ph .scanl{height:52px;top:0;border-radius:12px 12px 0 0}
+.ph.scan .scanl{display:block;animation-name:scanPh}
+.ph.ph-upload .scanl{animation:scanPhUp 1s linear infinite}
+.ph.scan img{box-shadow:0 0 0 2px var(--signal),0 0 18px rgba(45,212,191,.55);animation:phPulse 1.2s ease-in-out infinite alternate}
+.ph.ph-read img{box-shadow:0 0 0 2px #FBBF24,0 0 18px rgba(251,191,36,.5)}
+.ph.ph-upload img{box-shadow:0 0 0 2px #60A5FA,0 0 18px rgba(96,165,250,.5)}
+.pbar{position:relative;height:12px;border-radius:999px;background:var(--rule);overflow:hidden;margin:12px 0 2px}
+.pbar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;overflow:hidden;background:linear-gradient(90deg,#0FA192,#2DD4BF,#5EEAD4,#2DD4BF,#0FA192);background-size:200% 100%;
+  transition:width .9s cubic-bezier(.2,.8,.2,1);animation:pFlow 2.2s linear infinite;box-shadow:0 0 14px rgba(45,212,191,.6)}
+.pbar i::after{content:"";position:absolute;inset:0;background-image:repeating-linear-gradient(-45deg,rgba(255,255,255,.32) 0 7px,rgba(255,255,255,0) 7px 14px);background-size:19.8px 19.8px;animation:pStripes .7s linear infinite}
+.pbar::after{content:"";position:absolute;top:0;bottom:0;width:35%;left:-35%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.28),transparent);animation:pSweep 2s ease-in-out infinite}
+.pbar.mini{display:block;height:5px;margin:6px 0 0;max-width:180px}
+.pbar.mini::after{display:none}
+@keyframes pFlow{to{background-position:-200% 0}}
+@keyframes pStripes{to{background-position:19.8px 0}}
+@keyframes pSweep{to{left:100%}}
+@keyframes scanY{from{transform:translateY(-70%)}to{transform:translateY(230%)}}
+@keyframes scanUp{from{transform:translateY(300%)}to{transform:translateY(-100%)}}
+@keyframes scanPh{from{transform:translateY(-30px)}to{transform:translateY(128px)}}
+@keyframes scanPhUp{from{transform:translateY(128px)}to{transform:translateY(-52px)}}
+@keyframes phPulse{to{box-shadow:0 0 0 3px var(--signal),0 0 26px rgba(45,212,191,.8)}}
+@keyframes bbBreathe{50%{filter:brightness(1.08) saturate(1.1)}}
+@keyframes orb{to{transform:scale(.8);opacity:.75}}
+/* A refused request, in full */
+.err-jump{display:block;width:100%;margin:10px 0 8px;text-align:left;background:var(--amber-wash);color:var(--danger);border:1px solid rgba(251,191,36,.45);border-radius:12px;padding:10px 12px;font:inherit;font-weight:600;font-size:calc(14px * var(--ts))}
+.errbox{margin:12px 0 0;background:var(--amber-wash);border:1px solid rgba(251,191,36,.45);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;color:var(--ink)}
+.errbox>b{color:var(--danger);font-size:calc(15px * var(--ts))}
+.errbox p{margin:0;font-size:calc(13.5px * var(--ts))}
+.eb-list{margin:4px 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.eb-list li{background:var(--sheet);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;font-size:calc(14px * var(--ts))}
+.eb-list li b{color:var(--danger)}
+.eb-list code{font-size:calc(11px * var(--ts));color:var(--muted)}
+.errbox details summary{font-size:calc(13px * var(--ts));color:var(--signal);cursor:pointer;padding:2px 0}
+.errbox pre{white-space:pre-wrap;word-break:break-word;font-size:calc(11px * var(--ts));max-height:220px;overflow:auto;background:var(--sheet);border-radius:8px;padding:8px;margin:6px 0 0}
+.eb-btns{display:flex;gap:8px;justify-content:flex-end}
 .bar i{display:block;height:100%;background:var(--signal);transition:width .3s}
 .working{display:flex;align-items:center;gap:8px;margin:12px 0;color:var(--ink-2)}
 /* a batch of new photos */
@@ -2951,6 +3125,8 @@ textarea.fin{resize:vertical}
   .splash *{animation:none!important;opacity:1!important;transform:none!important;stroke-dashoffset:0!important}
   .splash{animation:spOut .3s ease 1.6s forwards!important}
   .sheet,#aisheet,#toast,.switch,.switch::after,.bar i{transition:none}
+  .pbar i,.pbar i::after,.pbar::after,.scanl,.bb-ph img,.orb,.ph.scan img{animation:none!important}
+  .scanl{opacity:.6;transform:translateY(80%)}
 }
 `;
 
