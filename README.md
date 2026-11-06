@@ -32,13 +32,16 @@ Photograph what you no longer need and Vintly turns the photos into Vinted listi
 ## Highlights
 
 - **Photos to items.** Take or pick photos of several things at once; AI sorts them into items, and you can move a photo with two taps.
-- **Clean backgrounds.** An OpenAI image model outlines the item and Vintly cuts your own photo along it onto white, so the item stays exactly as photographed. Or let the model redraw a studio photo (Vinted is told it's AI).
+- **Clean backgrounds.** An OpenAI image model outlines the item and Vintly cuts your own photo along it onto white, so the item stays exactly as photographed, including everything inside its outline (a screen, a print, dark parts). Or let the model redraw a studio photo (Vinted is told it's AI).
 - **Listings written for you.** Title, description, brand, condition and colours from the photos and your notes, in Lithuanian, English or another Vinted language, with a second language for buyers from abroad and a little humour if you like.
 - **Every Vinted field filled.** Category, size, material and the other fields the category asks for, matched against Vinted's own lists, plus the parcel size.
 - **A fair price.** Starts from Vinted's own price suggestion for the item, or the AI's used price, and goes a set share below it, rounded.
 - **You post.** Check everything, change any field, then tap **Post on Vinted** twice; or save a Vinted draft to finish on the website.
+- **Your Vinted messages.** Every time Vintly opens it loads your conversations; the unread count leads the Messages tab and the widget. Read a conversation and reply without leaving Vintly.
+- **Your listings, with delete.** All your Vinted listings, also those posted from the website, with views, favourites, sold and reserved. Open one on Vinted, or delete it with two taps.
+- **Stickers and a QR code.** Fun stickers around the item (never over it) catch kids' eyes, and a small Vintly QR code on the main photo leads parents to this page. Preview them before you post, or turn them off.
 - **Share sheet.** Share photos from Photos straight into Vintly.
-- **Home Screen widget** with items waiting and what you posted lately, a **launch screen**, **settings** with colours, layout and every limit, your own **AI key** with token usage, and **in-app updates**.
+- **Home Screen widget** with your unread Vinted messages and items waiting, a **launch screen**, **settings** with colours, layout and every limit, your own **AI key** with token usage, and **in-app updates**.
 
 ## Screenshots
 
@@ -48,7 +51,7 @@ Photograph what you no longer need and Vintly turns the photos into Vinted listi
   <img src="docs/screenshots/06-post.png" width="31%" alt="Ready to post, with the price and the Post button">
 </p>
 <p align="center">
-  <img src="docs/screenshots/07-posted.png" width="31%" alt="Posted items">
+  <img src="docs/screenshots/07-posted.png" width="31%" alt="Your listings on Vinted with views, favourites, reserved and sold">
   <img src="docs/screenshots/08-empty.png" width="31%" alt="First open, with Take photos and Choose photos">
   <img src="docs/screenshots/09-launch.png" width="31%" alt="Launch screen">
 </p>
@@ -59,7 +62,12 @@ Photograph what you no longer need and Vintly turns the photos into Vinted listi
 </p>
 <p align="center">
   <img src="docs/screenshots/13-dark.png" width="31%" alt="Dark theme">
-  <img src="docs/screenshots/14-widget.png" width="62%" alt="Home Screen widgets">
+  <img src="docs/screenshots/15-messages.png" width="31%" alt="Messages tab with two unread conversations">
+  <img src="docs/screenshots/16-conversation.png" width="31%" alt="A conversation with a buyer and the reply box">
+</p>
+<p align="center">
+  <img src="docs/screenshots/17-stickers.png" width="31%" alt="Preview of the photos with stickers and the Vintly QR code">
+  <img src="docs/screenshots/14-widget.png" width="62%" alt="Home Screen widget with unread Vinted messages">
 </p>
 
 ## Install
@@ -97,6 +105,9 @@ What else you need:
 | Change anything | Tap a field. Your changes stay when you prepare again |
 | Choose photos | Under each photo pick **Clean** or **Original**, move it with **‹ ›**, or remove it |
 | Post | Tap **Post on Vinted**, then tap again to confirm. **Save as a Vinted draft** sends it to your drafts instead |
+| See what buyers get | **👀 See the photos as buyers will** under the photos shows them with the stickers and the QR code |
+| Answer a buyer | **Messages** (the number is how many are unread), tap a conversation, write, **Send**. Opening it marks it as read on Vinted |
+| Delete a listing | **On Vinted**, tap the listing, **Delete from Vinted**, then tap again to confirm. It's gone on Vinted for good |
 
 <details>
 <summary><b>How the price is set</b></summary>
@@ -113,16 +124,31 @@ Vintly asks Vinted for its suggested price range for the item's category, brand 
 
 **Original** under a cleaned photo switches back to your photo for that one.
 
+Whatever lies inside the item's outline stays, even where the image model leaves it out: a screen, a print, a dark or shiny part.
+
+</details>
+
+<details>
+<summary><b>Stickers and the QR code</b></summary>
+
+Vintly draws them on the copies it sends to Vinted; the photos in Vintly stay as you took or cleaned them.
+
+- **Stickers for kids** (Settings › Photos: All items, Kids' items, Off): three or four stickers such as ⭐ 🌈 🎈 🦄, in the places with the most background, never over the item when there's room.
+- **Vintly QR code on the main photo** (on by default): a small white card in the emptiest corner that opens this page. When the item fills every corner, Vintly adds room under the photo for it.
+
+> [!WARNING]
+> Vinted's [catalogue rules](https://www.vinted.lt/catalog-rules) say listings must not link to other websites, and photos should show the item as it is. A QR code to GitHub can get a listing hidden; turn it off in Settings › Photos if you'd rather not take that risk.
+
 </details>
 
 ## Widget
 
-Items waiting to be posted, drafts, and what you posted lately with its price. It is the shared [widgets](https://github.com/gadominas/app-blueprints/blob/main/blueprints/widgets.md) blueprint, so all the apps' widgets look alike.
+Your unread Vinted messages up front, who wrote last and about which item (never the messages themselves), how many listings you have on Vinted, and how many items wait to be posted. Before you sign in to Vinted, it shows items waiting and what you posted lately. It is the shared [widgets](https://github.com/gadominas/app-blueprints/blob/main/blueprints/widgets.md) blueprint, so all the apps' widgets look alike.
 
 1. Long-press the Home Screen, tap **Edit › Add Widget**, choose **Scriptable** and a size.
 2. Long-press the widget, tap **Edit Widget**, set **Script** to *Vintly* and **When Interacting** to *Run Script*.
 
-Lock Screen widgets are added the same way under **Customize › Lock Screen**. The widget shows what Vintly saved the last time you used it, so it never signs in to Vinted itself.
+Lock Screen widgets are added the same way under **Customize › Lock Screen**. The widget shows what Vintly saved the last time you used it, so it never signs in to Vinted itself: open Vintly to bring the message count up to date. A count older than a day says when it was checked.
 
 ## AI
 
@@ -142,10 +168,10 @@ Tap the sliders icon at the top. Changes apply at once and are saved in `setting
 | Appearance | Colours (Auto or six palettes), layout (Comfortable, Compact, Tiny), text size, headline font |
 | Vinted | Vinted site (vinted.lt, .pl, .de, .fr and others), your account (sign in, switch, check), remove photos after posting |
 | Listings | Language and a second language, both languages in the title, a little humour, AI settings |
-| Photos | Cleaning: keep the item's pixels, studio photo or off |
+| Photos | Cleaning: keep the item's pixels, studio photo or off; stickers for kids (all items, kids' items, off); Vintly QR code on the main photo |
 | Privacy | Share anonymous usage, test the connection |
 | Updates | Offer new versions, check now, start-up log |
-| Pricing, Photos, AI, Vinted, Keeping items, Widget | How far below the usual price, rounding, lowest price; photo size, soft edge, room around the item, photos per item; photos AI looks at and their size; time limit for Vinted, category refresh; how long posted items stay; widget refresh, each with Reset |
+| Pricing, Photos, AI, Vinted, Keeping items, Widget | How far below the usual price, rounding, lowest price; photo size, soft edge, room around the item, photos per item; photos AI looks at and their size; time limit for Vinted, category refresh, how often messages are checked; how long posted items stay; widget refresh, each with Reset |
 | Built with | The shared blueprints this app follows, with links (read-only) |
 
 ## Updates and what's new
@@ -156,13 +182,14 @@ Vintly checks this repository for a new version each time it opens. When one is 
 
 - Your items, photos and settings live in Vintly's folder in iCloud Drive › Scriptable (on the iPhone when iCloud Drive is off). Your Vinted sign-in is Scriptable's web session, like a browser's; Vintly never sees or stores your password.
 - Photos go to your AI provider only when you tap **Prepare** or sort new photos, and to Vinted when you post. Listings go to Vinted only when you tap **Post** or **Save draft**.
+- Your Vinted messages and listings are read from Vinted inside Vintly and kept only on this iPhone, so they show at once next time. Message texts never go to AI, to the widget, or anywhere else; the widget shows who wrote and about which item.
 - AI keys stay in the iOS Keychain and are only sent to their own provider.
 - The update check only downloads `releases.json` from this repository.
-- **Anonymous usage**, if you say yes when asked (or in Settings › Privacy), sends counts such as app opens, photos added, items prepared and posted, with a random install ID, to [PostHog](https://posthog.com) (US cloud). Never your photos, titles, descriptions, prices, brands or Vinted account. Turning it off deletes the ID. The events are listed in [docs/BLUEPRINTS.md](docs/BLUEPRINTS.md#usage-events-usage-analytics-step-4).
+- **Anonymous usage**, if you say yes when asked (or in Settings › Privacy), sends counts such as app opens, photos added, items prepared and posted, conversations opened and replies sent, with a random install ID, to [PostHog](https://posthog.com) (US cloud). Never your photos, titles, descriptions, prices, brands, messages or Vinted account. Turning it off deletes the ID. The events are listed in [docs/BLUEPRINTS.md](docs/BLUEPRINTS.md#usage-events-usage-analytics-step-4).
 
 ## How it works
 
-Vintly talks to Vinted the way Vinted's website does: a hidden web view opens your Vinted site, signed in with Scriptable's cookies, and runs the requests from inside the page (photo upload, category and field lists, brands, colours, parcel sizes, price suggestions and posting). Category: Vinted's own guess from the first photo plus words from the listing, then AI picks from the matches. Cleaning sends each photo, letterboxed to the image model's size, to OpenAI's image edit endpoint and cuts the original along the returned outline in the page's canvas.
+Vintly talks to Vinted the way Vinted's website does: a hidden web view opens your Vinted site, signed in with Scriptable's cookies, and runs the requests from inside the page (photo upload, category and field lists, brands, colours, parcel sizes, price suggestions and posting; your listings and deleting one; your conversations, the unread count and replies). Category: Vinted's own guess from the first photo plus words from the listing, then AI picks from the matches. Cleaning sends each photo, letterboxed to the image model's size, to OpenAI's image edit endpoint and cuts the original along the returned outline in the page's canvas.
 
 ## Troubleshooting
 
@@ -174,6 +201,8 @@ Vintly talks to Vinted the way Vinted's website does: a hidden web view opens yo
 | A cut-out has a halo or misses a part | Pick **Original** under that photo, or **Clean the photos again**; **Soft edge around the item** is in Settings › Photos |
 | Wrong category | Tap **Category** and search for the right one: the fields reload for it |
 | Vintly stopped posting after working before | Vinted changed its website. Check for an update in Settings › Updates |
+| The message count on the widget is old | The widget can't sign in to Vinted; open Vintly and it checks right away |
+| A listing with the QR code was hidden by Vinted | Vinted doesn't allow links to other sites. Turn off **Vintly QR code on the main photo** in Settings › Photos and edit the listing's photos on Vinted |
 
 ## Built with
 
@@ -185,7 +214,7 @@ Maintainers: release notes live in [`releases.json`](releases.json); see [docs/R
 
 ## Disclaimer
 
-**Unofficial use of Vinted.** Vintly is not affiliated with, endorsed by or connected to Vinted UAB. It uses Vinted's website requests, signed in as you, which are not a public API: Vinted's terms may not allow automated listing, Vinted can change or block them at any time, and your account is your responsibility. Vintly never posts without your tap. Check every listing before you post it: AI can get the brand, size, condition or price wrong.
+**Unofficial use of Vinted.** Vintly is not affiliated with, endorsed by or connected to Vinted UAB. It uses Vinted's website requests, signed in as you, which are not a public API: Vinted's terms may not allow automated listing, Vinted can change or block them at any time, and your account is your responsibility. Vintly never posts, replies or deletes without your tap. The optional QR code on photos links to this repository, which Vinted's catalogue rules don't allow; it is on by default only because its owner chose so, and you can turn it off. Check every listing before you post it: AI can get the brand, size, condition or price wrong.
 
 A personal project, provided as is, without warranty. Vinted is a trademark of Vinted UAB. Claude is a trademark of Anthropic; OpenAI is a trademark of OpenAI.
 

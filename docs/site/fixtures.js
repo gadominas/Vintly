@@ -54,11 +54,13 @@ const scene = (k) => {
     <ellipse cx="450" cy="905" rx="300" ry="26" fill="rgba(0,0,0,.18)"/>
     <g transform="${tr}">${ITEMS[item]}</g></svg>`;
 };
+// Image models often leave dark parts inside an item black (a screen, a print): Vintly must keep them. The jacket's mask has such a hole.
+const HOLES = { jacket: '<rect x="340" y="440" width="220" height="360" style="fill:#000!important;stroke:none!important"/>' };
 // On the image model's 1024 × 1536 canvas the 900 × 1200 photo is scaled by 1024/900 and moved down by 85.33.
 const mask = (k) => {
   const [item, tr] = PHOTOS[k];
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536"><style>g *{fill:#fff!important;stroke:#fff!important}</style>
-    <rect width="1024" height="1536" fill="#000"/><g transform="translate(0 85.333) scale(1.137778)"><g transform="${tr}">${ITEMS[item]}</g></g></svg>`;
+    <rect width="1024" height="1536" fill="#000"/><g transform="translate(0 85.333) scale(1.137778)"><g transform="${tr}">${ITEMS[item]}${HOLES[item] || ''}</g></g></svg>`;
 };
 const clean = (k) => {
   const [item, tr] = PHOTOS[k];

@@ -102,6 +102,24 @@ function flatAttr(x) {
   return { code: x.code, title: x.configuration.title, required: x.configuration.required, multi: x.configuration.selection_type === 'multi', limit: x.configuration.selection_limit, options: flat(x.configuration.options) };
 }
 
+// ───────── Your Vinted account: invented listings and conversations ─────────
+const ME = { id: 98765432, login: 'vintly_demo' };
+const PIC = (k) => `https://images1.vinted.net/demo/${k}.jpg`;
+const WARDROBE = () => [
+  ['Vaikiškas mikroskopas / Kids microscope', 10, 'c1', 41, 6, {}], ['Little Tikes ksilofonas / Xylophone', 6, 'b1', 23, 3, { is_reserved: true }],
+  ['Medinis labirintas / Wooden maze', 4, 'a2', 57, 9, {}], ['Rūšiuoklis su formomis / Shape sorter', 5, 'c2', 18, 1, {}],
+  ['Lego Duplo traukinukas / Duplo train', 12, 'b2', 96, 14, { is_closed: true }],
+].map(([title, price, k, views, favs, x], i) => Object.assign({ id: 7700000001 + i, title, price: { amount: price.toFixed(1), currency_code: 'EUR' }, url: `https://www.vinted.lt/items/${7700000001 + i}-demo`,
+  photos: [{ url: PIC(k), thumbnails: [{ type: 'thumb310x430', url: PIC(k) }] }], view_count: views, favourite_count: favs, status: 'Labai gera', is_closed: false, is_reserved: false, is_hidden: false, is_draft: false }, x));
+const CONVS = () => [
+  { id: 'c0a8-01', who: 'ausra_k', item: 'Vaikiškas mikroskopas / Kids microscope', k: 'c1', unread: true, msgs: [
+    ['them', 'Laba diena! Ar mikroskopas dar parduodamas? Ar veikia lemputė?', 95], ['me', 'Sveiki! Taip, parduodamas, lemputė veikia, baterijos įdėtos 🙂', 80], ['them', 'Puiku! Ar galėtumėte atiduoti už 8 €?', 12]] },
+  { id: 'c0a8-02', who: 'tomas_v', item: 'Little Tikes ksilofonas / Xylophone', k: 'b1', unread: true, msgs: [
+    ['them', 'Hi! Could you send it to a Lithuanian post parcel locker in Kaunas?', 40]] },
+  { id: 'c0a8-03', who: 'lina.m', item: 'Medinis labirintas / Wooden maze', k: 'a2', unread: false, msgs: [
+    ['them', 'Ačiū, gavau! Vaikai labai patenkinti 🎉', 60 * 26], ['me', 'Džiaugiuosi! Gero žaidimo 🙂', 60 * 25]] },
+];
+
 // ───────── Routes: AI and Vinted, in the shapes they answer in ─────────
 // state: { masks: [photo keys in the order photos are cleaned], posted: [], signedIn: true }
 function routes(state) {
@@ -126,7 +144,25 @@ function routes(state) {
     const u = req.url;
     if (/vinted\.lt\/?$/.test(u)) return { body: VINTED_HOME, contentType: 'text/html' };
     if (/\/_next\/static/.test(u)) return { body: VINTED_JS, contentType: 'application/javascript' };
-    if (!state.signedIn && /\/api\/v2\//.test(u)) return { status: 401, json: { code: 100, message: 'Neprisijungta' } };
+    if (!state.signedIn && /\/api\/v2\/|\/messaging\//.test(u)) return { status: /users\/current|messaging/.test(u) ? 403 : 401, json: { code: 100, message: 'Neprisijungta' } };
+    if (/images1\.vinted\.net\/demo\/(\w+)\.jpg/.test(u)) return { body: img(u.match(/demo\/(\w+)\.jpg/)[1] + '-ct.jpg'), contentType: 'image/jpeg' };
+    if (/\/api\/v2\/users\/current/.test(u)) return { json: { user: ME, code: 0 } };
+    if (/\/api\/v2\/wardrobe\/\d+\/items/.test(u)) { state.wardrobe = state.wardrobe || WARDROBE(); return { json: { items: state.wardrobe, pagination: { current_page: 1, total_pages: 1, total_entries: state.wardrobe.length, per_page: 96 }, code: 0 } }; }
+    if (/\/api\/v2\/items\/(\d+)\/delete/.test(u) && req.method === 'POST') { const id = +u.match(/items\/(\d+)\/delete/)[1]; (state.deleted = state.deleted || []).push(id); state.wardrobe = (state.wardrobe || WARDROBE()).filter((x) => x.id !== id); return { json: { code: 0 } }; }
+    if (/\/messaging\/main\//.test(u)) {
+      state.convs = state.convs || CONVS();
+      const conv = (c) => ({ id: c.id, conversation_type: 'item', is_unread_by_current_user: c.unread, created_at: new Date(NOW - c.msgs[0][2] * MIN).toISOString(),
+        opposite_users: [{ data: { id: 5550000 + c.who.length, login_name: c.who } }], data: { subject: c.item, inventory_items: [{ id: 7700000001, title: c.item, photo: { url: PIC(c.k) } }] },
+        last_message: { data: { content: c.msgs[c.msgs.length - 1][1], created_at_ts: Math.round((NOW - c.msgs[c.msgs.length - 1][2] * MIN) / 1000) } } });
+      if (/\/inbox/.test(u)) return { json: { conversations: state.convs.map(conv), pagination: { current_page: 1, total_pages: 1 } } };
+      if (/unread_count/.test(u)) return { json: { count: state.convs.filter((c) => c.unread).length } };
+      const m = u.match(/conversations\/([^/?]+)(\/[a-z_]+)?/), c = m && state.convs.find((x) => x.id === decodeURIComponent(m[1]));
+      if (!c) return { status: 404, json: { code: 404, message: 'Not found' } };
+      if (m[2] === '/mark_as_read') { c.unread = false; return { json: { code: 0 } }; }
+      if (m[2] === '/replies') { const b = req.json() || {}; (state.replies = state.replies || []).push(b); c.msgs.push(['me', b.content, 0]); return { json: { code: 0 } }; }
+      return { json: { conversation: { id: c.id, messages: c.msgs.map(([side, text, ago], i) => ({ id: c.id + '-' + i, data: { id: 9000 + i, entity_type: 'message', entity: { content: text, user_id: side === 'me' ? ME.id : 5550000 + c.who.length }, created_at_ts: Math.round((NOW - ago * MIN) / 1000) } })),
+        opposite_users: [{ data: { login_name: c.who } }], data: { inventory_items: [{ title: c.item }] } } } };
+    }
     if (/item_upload\/colors/.test(u)) return { json: COLORS };
     if (/item_upload\/catalogs/.test(u)) return { json: CATALOGS };
     if (/item_upload\/attributes/.test(u)) { const id = ((req.json() || {}).attributes || [{}])[0].value[0]; return { json: { code: 0, attributes: [{ code: 'brand', configuration: null }].concat(ATTRS[id] || [CONDITION]) } }; }
@@ -146,7 +182,7 @@ function routes(state) {
     { match: 'api.openai.com/v1/images/edits', respond: () => { const k = (state.masks || []).shift() || 'a1'; return { json: { created: 1, data: [{ b64_json: img(k + '-mask.png').toString('base64') }], usage: { input_tokens: 1200, output_tokens: 1056 } } }; } },
     { match: 'api.openai.com/v1/models', respond: { json: { data: [{ id: 'gpt-4.1-mini', created: 1740000000 }, { id: 'gpt-image-1', created: 1745000000 }] } } },
     { match: /vinted\.(lt|net)/, respond: (req) => {   // api.vinted.lt answers the site's own page across origins, with its cookies
-      const cors = { 'access-control-allow-origin': 'https://www.vinted.lt', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, x-csrf-token, x-anon-id, x-upload-form, accept', 'access-control-allow-methods': 'GET, POST, PUT, OPTIONS' };
+      const cors = { 'access-control-allow-origin': 'https://www.vinted.lt', 'access-control-allow-credentials': 'true', 'access-control-allow-headers': 'content-type, x-csrf-token, x-anon-id, x-upload-form, accept', 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS' };
       if (req.method === 'OPTIONS') return { status: 204, body: '', headers: cors };
       const r = vinted(req);
       return r && /api\.vinted/.test(req.url) ? Object.assign({ headers: cors }, r) : r;
@@ -156,7 +192,7 @@ function routes(state) {
 function releases() { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'releases.json'), 'utf8')); }
 function withUpdate() {
   const r = releases();
-  r.releases.unshift({ version: '1.1.0', date: '2026-11-20', title: 'Sell faster',
+  r.releases.unshift({ version: '1.2.0', date: '2026-11-20', title: 'Sell faster',
     highlights: [{ icon: '🔁', title: 'Relist in one tap', text: 'Items that didn’t sell go back up with a fresh price.' },
       { icon: '📦', title: 'Parcel sizes learned', text: 'Vintly remembers the parcel size you pick for each kind of item.' },
       { icon: '✦', title: 'Better photo cut-outs', text: 'Thin straps and strings are kept when backgrounds go.' }], changes: [], fixes: [] });
@@ -182,7 +218,8 @@ module.exports = {
     files[DIR + '/settings.json'] = Object.assign({ theme: 'auto', density: 'comfortable', font: 'sans', textSize: 1, checkUpdates: true, cfg: {}, vintedOk: state.signedIn, vintedAt: NOW - 10 * MIN,
       usageAsked: true, aiInvite: { next: NOW + DAY }, models: { anthropic: { at: NOW - DAY, list: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }] } } }, shot.look || {});
     files[LOCAL + '/vintly-vinted-cache.json'] = { site: 'vinted.lt', colors: COLORS.colors.map((c) => ({ id: c.id, title: c.title, hex: c.hex, code: c.code })) };
-    if (!shot.empty) files[LOCAL + '/vintly-widget.json'] = { todo: 3, ready: 2, cur: 'EUR', posted7: 2, value7: 16, recent: [{ t: 'Vaikiškas mikroskopas / Kids microscope', p: 10, at: NOW - 2 * DAY }, { t: 'Little Tikes ksilofonas / xylophone', p: 6, at: NOW - 3 * DAY }, { t: 'Medinis labirintas / Wooden maze', p: 4, at: NOW - 9 * DAY }], at: NOW - 5 * MIN };
+    if (!shot.empty) files[LOCAL + '/vintly-widget.json'] = { todo: 3, ready: 2, cur: 'EUR', posted7: 2, value7: 16, recent: [{ t: 'Vaikiškas mikroskopas / Kids microscope', p: 10, at: NOW - 2 * DAY }, { t: 'Little Tikes ksilofonas / xylophone', p: 6, at: NOW - 3 * DAY }, { t: 'Medinis labirintas / Wooden maze', p: 4, at: NOW - 9 * DAY }], at: NOW - 5 * MIN,
+      signedIn: true, inboxAt: NOW - 4 * MIN, unread: 2, listings: 4, sold: 1, convs: CONVS().map((c) => ({ who: c.who, item: c.item, at: NOW - c.msgs[c.msgs.length - 1][2] * MIN, unread: c.unread })) };
     return { files, keychain: shot.noKey ? {} : KEYS, alerts: [], routes: routes(state), state };
   },
   shots: [],
@@ -203,8 +240,8 @@ module.exports.shots = [
     run: async (h) => { await h.tap('.card'); await h.wait(400); await h.scrollEl('#itemsheet', 960); } },
   { id: '06-post', label: 'One tap to post', caption: 'Nothing goes out without you: tap once more to confirm, or save a Vinted draft.',
     run: async (h) => { await h.tap('.card'); await h.wait(400); await h.scrollEl('#itemsheet', 4000); await h.tap('#itemsheet [data-act="post"]'); await h.wait(300); } },
-  { id: '07-posted', label: 'Posted, with a link back', caption: 'Everything you posted, kept for 60 days, each a tap from its Vinted page.',
-    run: async (h) => { await h.tap('[data-act="tab"][data-v="posted"]'); await h.wait(400); } },
+  { id: '07-posted', label: 'Your listings, on Vinted', caption: 'Every listing with its views and favourites; open it on Vinted or delete it, with two taps.',
+    run: async (h) => { await h.wait(1200); await h.tap('[data-act="tab"][data-v="posted"]'); await waitFor(h, `document.querySelectorAll('#main [data-act="vopen"]').length === 5`); await h.wait(600); } },
   { id: '08-empty', label: 'Snap it. List it.', caption: 'Take photos or choose them; sharing photos to Vintly from Photos works too.', empty: true },
   { id: '09-launch', label: 'Launch screen', caption: 'A price tag draws itself, then “Snap. Price. Sell.” Tap to skip.', settle: 1650, after: 0 },
   { id: '10-settings', label: 'Settings', caption: 'Your Vinted site and account, listing languages, photo cleaning and pricing.',
@@ -213,5 +250,11 @@ module.exports.shots = [
     run: async (h) => { await h.tap('[data-act="cfgopen"]'); await h.tap('[data-act="aiopen"]'); await h.wait(700); await h.scrollEl('#aisheet', 560); } },
   { id: '12-update', state: { update: true }, label: 'Updates in the app', caption: 'A new version shows its three best features; your items and settings stay.', settle: 4300 },
   { id: '13-dark', dark: true, label: 'Dark mode', caption: 'Every palette and text size, from Settings › Appearance.' },
-  { id: '14-widget', widget: 'medium', label: 'Home Screen widget', caption: 'What waits to be posted, how many are ready, and what you posted lately.' },
+  { id: '14-widget', widget: 'medium', label: 'Home Screen widget', caption: 'Unread Vinted messages up front, who wrote, and what waits to be posted.' },
+  { id: '15-messages', label: 'Your Vinted messages', caption: 'Loaded every time Vintly opens; the unread count leads, here and on the widget.',
+    run: async (h) => { await h.wait(1200); await h.tap('[data-act="tab"][data-v="msgs"]'); await waitFor(h, `document.querySelectorAll('#main .conv').length === 3`); await h.wait(500); } },
+  { id: '16-conversation', label: 'Reply without leaving', caption: 'Read the whole conversation and answer the buyer right in Vintly.',
+    run: async (h) => { await h.wait(1200); await h.tap('[data-act="tab"][data-v="msgs"]'); await waitFor(h, `document.querySelectorAll('#main .conv').length === 3`); await h.tap('#main .conv[data-v="c0a8-01"]'); await waitFor(h, `document.querySelectorAll('#convsheet .bub').length === 3`); await h.page.fill('#replybox', 'Sutinku, 8 € tinka! 🙂'); await h.wait(500); } },
+  { id: '17-stickers', label: 'Fun for kids, a code for parents', caption: 'Stickers where there’s background, and a Vintly QR code on the main photo. Preview before you post.',
+    run: async (h) => { await h.tap('.card'); await h.wait(400); await h.tap('#itemsheet [data-act="decoprev"]'); await waitFor(h, `document.querySelectorAll('#decoview .dv-ph img').length >= 2`); await h.wait(400); } },
 ];

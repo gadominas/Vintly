@@ -82,8 +82,34 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   }, emu.files.get(`${sc.DIR}/photos/${J.id}/${J.photos[0].id}-clean.jpg`).toString('base64'));
   if (SHOTS) J.photos.forEach((p, i) => fs.writeFileSync(path.join(OUT, `clean-${i + 1}.jpg`), emu.files.get(`${sc.DIR}/photos/${J.id}/${p.id}-clean.jpg`)));
   ok(px.corner.every((v) => v > 245), 'cut-out corner is white ' + px.corner);
-  ok(px.middle[2] > px.middle[0] + 40, 'cut-out middle is the denim blue ' + px.middle);
+  ok(px.middle[2] > px.middle[0] + 40, 'cut-out middle is the denim blue, though the mask had a hole there ' + px.middle);
   ok(Math.abs(px.w / px.h - 0.75) < 0.02, `cut-out keeps the photo's shape (${px.w}×${px.h})`);
+
+  console.log('Stickers and the QR code');
+  const deco = await page.evaluate(async ([clean, orig]) => {
+    const look = async (b64) => {
+      const i = new Image(); i.src = 'data:image/jpeg;base64,' + b64; await i.decode();
+      const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
+      const d = x.getImageData(0, 0, i.width, i.height).data; let dark = 0, colour = 0;
+      for (let k = 0; k < d.length; k += 4) { if (d[k] + d[k + 1] + d[k + 2] < 120) dark++; if (Math.max(d[k], d[k + 1], d[k + 2]) - Math.min(d[k], d[k + 1], d[k + 2]) > 90) colour++; }
+      return { w: i.width, h: i.height, dark, colour };
+    };
+    const plain = await look(clean);
+    const a = await window.__decorate(clean, { stickers: true, qr: true, seed: 5, max: 1600 });
+    const b = await window.__decorate(orig, { stickers: true, qr: false, seed: 6, max: 1600 });
+    const c = await window.__decorate(clean, { stickers: false, qr: false, seed: 5, max: 1600 });
+    return { plain, a: await look(a.b64), b: await look(b.b64), c: await look(c.b64), A: a.b64, B: b.b64 };
+  }, [emu.files.get(`${sc.DIR}/photos/${J.id}/${J.photos[0].id}-clean.jpg`).toString('base64'), emu.files.get(`${sc.DIR}/photos/${J.id}/${J.photos[1].id}.jpg`).toString('base64')]);
+  if (SHOTS) { fs.writeFileSync(path.join(OUT, 'decorated-main.jpg'), Buffer.from(deco.A, 'base64')); fs.writeFileSync(path.join(OUT, 'decorated-orig.jpg'), Buffer.from(deco.B, 'base64')); }
+  ok(deco.a.w === deco.plain.w && deco.a.h >= deco.plain.h, `decorated photo keeps its width (${deco.plain.w}×${deco.plain.h} → ${deco.a.w}×${deco.a.h})`);
+  ok(deco.a.dark > deco.plain.dark + 2000, `the QR code is drawn (${deco.plain.dark} → ${deco.a.dark} dark pixels)`);
+  ok(deco.a.colour > deco.plain.colour + 500, `stickers are drawn (${deco.plain.colour} → ${deco.a.colour} colourful pixels)`);
+  ok(Math.abs(deco.c.dark - deco.plain.dark) < 400, 'nothing is added when both are off');
+  await page.click('#itemsheet [data-act="decoprev"]');
+  await until(`document.querySelectorAll('#decoview .dv-ph img').length === 2`, null, 20000);
+  await shot('3b-preview');
+  ok(true, 'the buyer preview shows both photos decorated');
+  await page.click('#decoview [data-act="decoclose"]');
 
   console.log('Post it');
   await page.evaluate(() => { const s = document.getElementById('itemsheet'); s.scrollTop = s.scrollHeight; });
@@ -112,11 +138,51 @@ const ok = (cond, what) => { console.log((cond ? '  ✓ ' : '  ✗ ') + what); i
   const usage = JSON.parse(emu.files.get(sc.DIR + '/usage.json').toString());
   ok(usage.p.openai.features.cleanup.calls === 2 && usage.p.anthropic.features.listing.calls === 1 && usage.p.anthropic.features.sort.calls === 1, 'token usage counted per feature');
 
-  console.log('Widget');
   await page.click('#itemsheet [data-act="close"]');
+
+  console.log('Messages');
+  ok((JSON.parse(emu.files.get(sc.DIR + '/settings.json').toString()).vintedUser || {}).id === 98765432, 'the sign-in check asks Vinted who you are (/users/current) and keeps your id');
+  await until(`(document.querySelector('[data-act="tab"][data-v="msgs"] .n.hot') || {}).textContent === '2'`, null, 20000);
+  ok(true, 'the Messages tab shows 2 unread, loaded on open');
+  await page.click('[data-act="tab"][data-v="msgs"]');
+  await until(`document.querySelectorAll('#main .conv').length === 3`);
+  ok((await page.$$('#main .conv.unread')).length === 2, 'three conversations, two unread');
+  await shot('6-messages');
+  await page.click('#main .conv[data-v="c0a8-01"]');
+  await until(`document.querySelectorAll('#convsheet .bub').length === 3`);
+  ok((await page.$$('#convsheet .bub.me')).length === 1, 'your own message is on your side');
+  ok(/už 8 €/.test(await page.textContent('#convsheet .bub.them:last-of-type')), "the buyer's last message is shown");
+  ok(state.convs[0].unread === false, 'opening it marks it as read on Vinted');
+  await page.fill('#replybox', 'Sutinku, 8 € tinka! 🙂');
+  await page.click('#convsheet [data-act="replysend"]:not([data-v])');
+  await until(`document.querySelectorAll('#convsheet .bub').length === 4`);
+  ok(state.replies && state.replies[0].content === 'Sutinku, 8 € tinka! 🙂' && state.replies[0].is_personal_data_sharing_check_skipped === false, 'the reply reached Vinted');
+  ok(await page.$eval('#replybox', (t) => t.value === ''), 'the reply box is empty again');
+  await shot('7-conversation');
+  await page.click('#convsheet [data-act="convclose"]');
+  await until(`(document.querySelector('[data-act="tab"][data-v="msgs"] .n') || {}).textContent === '1'`);
+  ok(true, 'one unread left');
+
+  console.log('Your listings');
+  await page.click('[data-act="tab"][data-v="posted"]');
+  await until(`document.querySelectorAll('#main [data-act="vopen"]').length === 5`);
+  ok(/Sold/.test(await page.textContent('#main')) && /Reserved/.test(await page.textContent('#main')), 'sold and reserved listings are marked');
+  await shot('8-listings');
+  await page.click('#main [data-act="vopen"][data-v="7700000003"]');
+  await until(`document.querySelector('#vsheet.open [data-act="vdel"]')`);
+  await page.click('#vsheet [data-act="vdel"]');
+  ok(/Confirm/.test(await page.textContent('#vsheet [data-act="vdel"]')) && !(state.deleted || []).length, 'the first tap only asks to confirm');
+  await page.click('#vsheet [data-act="vdel"]');
+  await until(`document.querySelectorAll('#main [data-act="vopen"]').length === 4`);
+  ok(JSON.stringify(state.deleted) === '[7700000003]', 'the maze was deleted on Vinted (POST /items/<id>/delete)');
+  ok(!(await page.$('#vsheet.open')), 'its sheet closed');
+
+  console.log('Widget');
   emu.presented = null;
   const w = JSON.parse(emu.files.get(sc.LOCAL + '/vintly-widget.json').toString());
   ok(w.todo === 2 && w.recent.length === 1 && w.posted7 === 1, 'widget snapshot: 2 to post, 1 posted this week');
+  ok(w.signedIn && w.unread === 1 && w.convs.length === 3 && w.convs[0].unread && w.listings === 3 && w.sold === 1, `widget snapshot: 1 unread message, 3 listings, 1 sold (${w.unread}, ${w.listings}, ${w.sold})`);
+  ok(!JSON.stringify(w).includes('8 €'), 'the widget never holds message texts');
 
   ok(!emu.errors.length, 'no script or page errors' + (emu.errors.length ? ': ' + emu.errors.join(' | ').slice(0, 400) : ''));
   await emu.close();

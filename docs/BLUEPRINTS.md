@@ -10,7 +10,7 @@ The script's `BLUEPRINTS` block is the source of truth; this table mirrors it an
 | [settings](https://github.com/gadominas/app-blueprints/blob/settings-v1.1.2/blueprints/settings.md) | 1.1.2 | 1.0.0 | The header has no refresh button (Vintly has nothing to refresh): Settings sits left of **Add photos** instead. App sections: Vinted, Listings (with the AI settings row), Photos, then Privacy. Section cards are built by `cardSections()` after each render (as in Stockit). See the settings map below |
 | [ai-configuration](https://github.com/gadominas/app-blueprints/blob/ai-configuration-v1.0.0/blueprints/ai-configuration.md) | 1.0.0 | 1.0.0 | `aiCall` takes photos (`images`, base64 JPEGs) as in Stockit and VisionX. **Photo cleanup** is an OpenAI image edit (`/v1/images/edits`), which `aiCall` can't send: it goes through `aiImageEdit()`, which reads the key the same way, records its tokens with `recordUsage("openai", <image model>, "cleanup", …)` after every request, and always uses OpenAI (Claude has no image output), whichever provider is **In use**. **What AI does** has two switches (Sort new photos into items, Clean photo backgrounds) and the image model menu, filled from the OpenAI key's `gpt-image*` models by `fetchModels` |
 | [launch-screen](https://github.com/gadominas/app-blueprints/blob/launch-screen-v1.0.0/blueprints/launch-screen.md) | 1.0.0 | 1.0.0 | None. The name uses the app's `--display` font (`--sp-font`), as in Stockit |
-| [widgets](https://github.com/gadominas/app-blueprints/blob/widgets-v1.1.0/blueprints/widgets.md) | 1.1.0 | 1.0.0 | Rows layout (no cells, pins or privacy mode: there are no amounts to hide beyond prices you post publicly). The model has no `at`: the snapshot only changes inside Vintly, which saves it on close and after preparing, posting or deleting |
+| [widgets](https://github.com/gadominas/app-blueprints/blob/widgets-v1.1.0/blueprints/widgets.md) | 1.1.0 | 1.0.0 | Rows layout (no cells, pins or privacy mode: there are no amounts to hide beyond prices you post publicly). Signed in, the hero is your unread Vinted messages and the rows are who wrote and about which item (never message texts); the model's `at` is the last inbox check, so an old count turns amber. Signed out: items waiting and what you posted lately, with no `at` (that part only changes inside Vintly). The widget never reaches Vinted itself: it can't use the web view's session |
 | [ai-invitation](https://github.com/gadominas/app-blueprints/blob/ai-invitation-v1.2.1/blueprints/ai-invitation.md) | 1.2.1 | 1.0.0 | `window.canInvite` holds the card back while photos come in or an item is being prepared or posted |
 | [usage-analytics](https://github.com/gadominas/app-blueprints/blob/usage-analytics-v1.1.0/blueprints/usage-analytics.md) | 1.1.0 | 1.0.0 | Event catalog below |
 
@@ -33,16 +33,19 @@ Coding rules every app follows (https://github.com/gadominas/app-blueprints/tree
 | Listing language, second language | `lang`, `lang2` | Menus | Listings |
 | Both languages in the title, a little humour | `bothTitles`, `humour` | Switches | Listings |
 | Cleaning style (item's own pixels, AI studio photo, off) | `cleanStyle` | Segmented control | Photos |
+| Stickers for kids (all items, kids' items, off) | `stickers` | Segmented control | Photos |
+| Vintly QR code on the main photo | `qrBadge` | Switch | Photos |
 | Sort new photos into items, clean photo backgrounds | `ai`, `aiClean` | Switches | AI settings › What AI does |
 | Image model | `imageModel` | Menu | AI settings › What AI does |
 | Price below the usual, rounding, lowest price | `priceBelowPct`, `priceRound`, `priceMin` | Tunables | Pricing |
 | Photo size, soft edge, room around the item, photos per item | `photoMax`, `maskGrow`, `itemMargin`, `maxPhotos` | Tunables | Photos |
 | Photos AI looks at, their size | `aiPhotos`, `aiPhotoPx` | Tunables | AI |
-| Time limit for Vinted, category refresh | `vintedTimeout`, `catalogDays` | Tunables | Vinted |
+| Time limit for Vinted, category refresh, check messages every | `vintedTimeout`, `catalogDays`, `inboxEveryMin` | Tunables | Vinted |
 | Keep posted items for | `keepPostedDays` | Tunable | Keeping items |
 | Widget refresh, out of date after | `widgetRefreshMin`, `widgetStaleMin` (1440: used about once a day) | Tunables | Widget |
 | To post / Posted tab | `tab` | Tabs | Remembered pick |
-| Vinted signed in, last check | `vintedOk`, `vintedAt` | none | Internal state |
+| Vinted signed in, last check, your Vinted id and login | `vintedOk`, `vintedAt`, `vintedUser` | none | Internal state |
+| Your listings, conversations, unread count | the local Vinted cache (`vintly-vinted-cache.json`, on this iPhone) | none | Cache |
 | Vinted's endpoints, colours cache, CSRF lookup, condition ids | code constants | none | Code |
 
 ## Usage events (usage-analytics, Step 4)
@@ -54,9 +57,12 @@ Coding rules every app follows (https://github.com/gadominas/app-blueprints/tree
 | `items_sorted` | `photos`, `items`, `provider` |
 | `photos_cleaned` | `photos`, `ok`, `style` |
 | `item_prepared` | `provider`, `photos`, `vinted` (fields filled), `seconds` |
-| `item_posted` | `photos`, `mode` (post, draft), `cleaned` |
+| `item_posted` | `photos`, `mode` (post, draft), `cleaned`, `decor` (both, stickers, qr, none) |
+| `listing_deleted` | none |
+| `conversation_opened` | none |
+| `reply_sent` | none |
 | `vinted_signed_in` | `site` (lt, pl, de …) |
 | `app_updated` | `from`, `to` |
 | `usage_opt_in`, `usage_test` | none |
 
-Never sent: photos, titles, descriptions, prices, brands, categories, the Vinted account or anything read from Vinted.
+Never sent: photos, titles, descriptions, prices, brands, categories, messages, buyers' names, the Vinted account or anything read from Vinted.
