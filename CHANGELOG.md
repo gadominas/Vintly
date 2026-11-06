@@ -2,6 +2,24 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.1.0 (2026-11-06): Messages, listings and stickers
+
+- 💬 **Vinted messages in Vintly**: Unread count on open and on the widget; read and reply right here.
+- 🗑️ **Your listings, with delete**: Every listing with views and favourites; delete one with two taps.
+- 🦄 **Stickers and a QR code**: Fun stickers around the item and a Vintly QR code on the main photo.
+
+**Changes**
+
+- Messages tab: your Vinted conversations, unread first in the count, loaded every time Vintly opens and every 2 minutes while it's open (Settings › Vinted)
+- Open a conversation to read it all and reply; it's marked as read on Vinted. If Vinted thinks a reply shares personal details, you can send it anyway
+- The widget leads with your unread Vinted messages and who wrote (never the messages themselves), then what waits to be posted
+- On Vinted tab: all your listings, also those posted from the website, with views, favourites, sold, reserved and hidden; open one on Vinted or delete it with two taps
+- Stickers for kids (all items, kids' items only, or off) around the item on the photos sent to Vinted, never over it; your own photos stay as they are
+- Vintly's QR code on the main photo, linking to its GitHub page; Vintly makes room under the photo when the item fills the corners. Vinted's rules don't allow links, so it can be turned off
+- 👀 See the photos as buyers will, from any item
+- Cut-outs keep everything inside the item's outline: screens, prints and dark parts the image model leaves out are filled back in
+- Fixed: the sign-in check now asks Vinted who you are, so it can't say “signed in” when you aren't
+
 ## 1.0.1 (2026-11-06): Signed in, for real
 
 - 🔑 **Vinted sign-in works**: After you sign in, Vintly sees it straight away and loads Vinted's fields.
