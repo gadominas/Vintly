@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -51,19 +51,30 @@ const USAGE = { HOST: 'https://us.i.posthog.com', KEY: 'phc_yAi2PxJCRioWEKLF3uoc
 const KC_INSTALL = 'vintly-install-id';
 
 // ───────── Blueprints ─────────
-// Shared blueprints this app was built with (github.com/gadominas/app-blueprints). One line per blueprint, in this exact shape:
+// Shared blueprints this app was built with. One line per blueprint, in this exact shape:
 // inventory tools read it without running the script, and Settings › Built with shows it.
-const BLUEPRINTS_REPO = 'https://github.com/gadominas/app-blueprints';
 const BLUEPRINTS = [
-  { id: 'stability-patterns', name: 'Stability patterns', version: '1.0.1', since: '1.4.1' },
-  { id: 'in-app-updates', name: 'In-app updates', version: '1.1.0', since: '1.4.1' },
-  { id: 'settings', name: 'Settings', version: '1.1.2', since: '1.0.0' },
-  { id: 'ai-configuration', name: 'AI configuration', version: '1.0.1', since: '1.4.1' },
-  { id: 'launch-screen', name: 'Launch screen', version: '1.0.1', since: '1.4.1' },
+  { id: 'stability-patterns', name: 'Stability patterns', version: '1.0.2', since: '1.5.0' },
+  { id: 'in-app-updates', name: 'In-app updates', version: '1.1.1', since: '1.5.0' },
+  { id: 'settings', name: 'Settings', version: '2.0.1', since: '1.5.0' },
+  { id: 'ai-configuration', name: 'AI configuration', version: '1.0.2', since: '1.5.0' },
+  { id: 'launch-screen', name: 'Launch screen', version: '1.0.2', since: '1.5.0' },
   { id: 'widgets', name: 'Widgets', version: '1.1.1', since: '1.4.1' },
-  { id: 'ai-invitation', name: 'AI invitation', version: '1.2.1', since: '1.0.0' },
-  { id: 'usage-analytics', name: 'Anonymous usage analytics', version: '1.1.0', since: '1.0.0' },
+  { id: 'ai-invitation', name: 'AI invitation', version: '1.2.2', since: '1.5.0' },
+  { id: 'usage-analytics', name: 'Anonymous usage analytics', version: '1.1.1', since: '1.5.0' },
 ];
+// What each blueprint is, shown when a Built with row is tapped (settings blueprint, Step 9).
+// Written by `node tools/about.js` in app-blueprints from the versions in BLUEPRINTS; never edit by hand.
+const BLUEPRINT_ABOUT = {
+  'stability-patterns': { what: "The rules that keep the app opening on any iPhone.", does: "Uses iCloud only when this iPhone has it, keeps data on the phone otherwise, and checks the Keychain before reading from it.", drives: "Where the app keeps its data, the widget, the installer and in-app updates.", why: "A new phone, one without iCloud or one with nothing saved yet still opens the app, instead of stopping with an error." },
+  'in-app-updates': { what: "The way the app offers and installs its own new versions.", does: "When the app opens it checks for a newer version, shows its three best features, and installs it with Update now; Later waits two days.", drives: "The update sheet, Settings › Updates and the installer.", why: "Fixes and features reach you without reinstalling by hand, and the app only replaces itself with a checked, newer copy." },
+  'settings': { what: "The shared Settings sheet every app has.", does: "Keeps the app's look, behaviour and limits in one place; changes apply at once and survive updates.", drives: "Appearance (colours, layout, text size, font), the app's own choices, Updates, every adjustable value, and this Built with list.", why: "Nobody edits code to change a setting, and every app is set up the same familiar way." },
+  'ai-configuration': { what: "How the app connects to Claude or OpenAI.", does: "Keeps your key in the iPhone Keychain, lets you pick the provider and model, tests the connection and counts the tokens each feature uses.", drives: "Settings › AI settings, every AI feature, and the ✦ AI label on everything AI wrote.", why: "Your key goes only to its own provider, you can see what AI uses, and the app still works without a key." },
+  'launch-screen': { what: "The branded screen the app opens on.", does: "Shows the app's logo, name and tagline for about two and a half seconds; a tap skips it, and Reduce Motion keeps it still.", drives: "The first moment after the app opens, with the same logo as the icon and the widget.", why: "The app starts the same recognisable way every time while its page gets ready behind the screen, and the screen can never get stuck." },
+  'widgets': { what: "The shared design for the app's Home Screen and Lock Screen widgets.", does: "Draws the app's logo and name, one headline figure or title, a few rows and an updated line, from the app's own data.", drives: "Every widget size, the Lock Screen versions, and the widget's settings.", why: "Widgets name their app, look like one family, say when their data is old, and never show a script error." },
+  'ai-invitation': { what: "A short card that shows what AI adds to this app.", does: "While no AI key is set, it names three things AI can do here and takes you straight to adding a key; it comes back every few days at most, and Don't remind me again ends it.", drives: "The invitation at launch, and the hand-over to Settings › AI settings.", why: "Features that need a key are hidden without one, so they are easy to miss; this shows them without nagging or covering anything else." },
+  'usage-analytics': { what: "Optional, anonymous counts of which features get used.", does: "Only after you say yes, it sends counts and fixed choices, never names, text, links or keys; turning it off stops sending and forgets the install ID.", drives: "The one-time question on the main page and Settings › Privacy.", why: "It shows what to improve next without collecting anything personal." },
+};
 
 // ---------- config ----------
 const APP = "Vintly";
@@ -1600,7 +1611,7 @@ function clientState() {
     },
     palettes: PALETTES, version: VERSION, nativeShell: NATIVE_SHELL,
     usageAvailable: usageAvailable(), usageStatus: usageStatus(), usageAsk: usageAvailable() && !settings.usageAsked && !settings.shareUsage,
-    blueprints: BLUEPRINTS, blueprintsRepo: BLUEPRINTS_REPO, appName: APP,
+    blueprints: BLUEPRINTS, blueprintAbout: BLUEPRINT_ABOUT, appName: APP,
   };
 }
 const safeJSON = x => JSON.stringify(x === undefined ? null : x).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029").replace(/<\//g, "<\\/");
@@ -1671,9 +1682,6 @@ async function handle(m) {
       try { txt = FileManager.local().readString(LOG_PATH).split("\n").slice(-40).join("\n"); } catch (e) {}
       return call("__done", m.req, true, txt);
     }
-    case "openurl":   // Settings › Built with: only the blueprints repository opens from here
-      if (m.v === BLUEPRINTS_REPO || String(m.v).startsWith(BLUEPRINTS_REPO + "/")) await Safari.openInApp(m.v, false);
-      return;
     case "specsrc": {   // a source of the technical details: only links the lookup itself returned, opened in Safari
       const u = String(m.v || "");
       if (it && it.specs && (it.specs.sources || []).some(s => s.url === u) && /^https:\/\//.test(u)) await Safari.openInApp(u, false);
@@ -2661,14 +2669,40 @@ function clientApp() {
   const cfgItem = k => { for (const sec of S.cfgSchema) for (const d of sec.items) if (d.k === k) return d; return null; };
   const cfgChanged = k => { const d = cfgItem(k); return d && JSON.stringify(S.cfg[k]) !== JSON.stringify(d.def); };
   const fmtCfg = (d, v) => d.step && d.step < 1 ? Number(v).toFixed(String(d.step).split(".")[1].length) : String(v);
-  const bpLink = b => `${S.blueprintsRepo}/blob/${b.id}-v${b.version}/blueprints/${b.id}.md`;   // the exact version the app follows
+  // Settings › Built with (settings blueprint 2.0.1, Step 9): a tap shows what a blueprint is, from text bundled in the app.
+  var bpOpen = null;   // a blueprint id, "*" for About blueprints, or null
+  var BP_KEYS = ["what", "does", "drives", "why"];
+  var BP_EN = {"fields": ["What it is", "What it does", "What it drives", "Why it matters"], "allTitle": "About blueprints", "allSub": "What they are and why every app has them", "kick": "Blueprint", "kickAll": "Built with", "none": "This version of the app carries no description of this blueprint.", "all": {"what": "Shared designs this app and its sister apps are built from, one for each part they have in common.", "does": "Each one fixes how its part works: what you see, the words used, where data is kept and the safety rules.", "drives": "Every row above; each says which version this app follows, and since which version of the app.", "why": "A fix or improvement made once reaches every app the same way, so the apps stay alike and dependable."}};
+  var BP_I18N = {};   // the About text in the app's other languages (BLUEPRINT_ABOUT stays English)
+  function bpT(k) { var t = BP_I18N["en"]; return t && t[k] != null ? t[k] : BP_EN[k]; }
+  function bpEl() {
+    var el = document.getElementById("bpabout");
+    if (!el) {
+      el = document.createElement("div"); el.id = "bpabout"; el.setAttribute("aria-hidden", "true"); document.body.appendChild(el);
+      el.addEventListener("click", function (e) { e.stopPropagation(); var t = e.target.closest("[data-act]"); if (t && t.getAttribute("data-act") === "bpclose") { bpOpen = null; renderBp(); } });
+    }
+    return el;
+  }
+  function renderBp() {
+    var el = bpEl(), b = null, items = (BP_I18N["en"] || {}).items || {};
+    S.blueprints.forEach(function (x) { if (x.id === bpOpen) b = x; });
+    var a = bpOpen === "*" ? bpT("all") : b ? (items[b.id] || (S.blueprintAbout || {})[b.id]) : null;
+    el.classList.toggle("open", !!(a || b)); el.setAttribute("aria-hidden", a || b ? "false" : "true");
+    if (!a && !b) return;   // closing: keep the old content while the card slides away
+    var F = bpT("fields");
+    el.innerHTML = '<div class="bp-dim" data-act="bpclose"></div><div class="bp-card" role="dialog" aria-modal="true" aria-labelledby="bp-h">' +
+      '<div class="bp-top"><div class="grow"><small class="bp-kick">' + esc(b ? bpT("kick") : bpT("kickAll")) + '</small><h2 id="bp-h">' + esc(b ? b.name : bpT("allTitle")) + '</h2>' +
+      (b ? '<small class="muted">' + esc("Blueprint " + b.version + " · since " + S.appName + " " + b.since) + '</small>' : '') + '</div><button class="link" data-act="bpclose">' + esc("Done") + '</button></div>' +
+      (a ? BP_KEYS.map(function (k, i) { return '<h3 class="bp-l">' + esc(F[i]) + '</h3><p class="bp-p">' + esc(a[k]) + '</p>'; }).join("") : '<p class="bp-p muted">' + esc(bpT("none")) + '</p>') + '</div>';
+    el.querySelector(".bp-card").scrollTop = 0;
+  }
   function builtWithHTML() {
     return `<h3 class="sec">Built with</h3>
-      <p class="hint">${esc(S.appName)} is built from shared blueprints that its other apps use too. Tap one to read how that part works.</p>
-      ${S.blueprints.map(b => `<button class="srow bp" data-act="openurl" data-v="${esc(bpLink(b))}">
+      <p class="hint">${esc(S.appName)} is built from shared blueprints that its other apps use too. Tap one to see what it does.</p>
+      ${S.blueprints.map(b => `<button class="srow bp" data-act="bpabout" data-v="${esc(b.id)}">
         <div class="grow"><b>${esc(b.name)}</b><small class="muted">Blueprint ${esc(b.version)} · since ${esc(S.appName)} ${esc(b.since)}</small></div><span class="chev" aria-hidden="true">›</span></button>`).join("")}
-      <button class="srow bp" data-act="openurl" data-v="${esc(S.blueprintsRepo)}">
-        <div class="grow"><b>All blueprints</b><small class="muted">${esc(S.blueprintsRepo.replace("https://", ""))}</small></div><span class="chev" aria-hidden="true">›</span></button>`;
+      <button class="srow bp" data-act="bpabout" data-v="${esc("*")}">
+        <div class="grow"><b>About blueprints</b><small class="muted">${esc(bpT("allSub"))}</small></div><span class="chev" aria-hidden="true">›</span></button>`;
   }
   const sw = (k, label, help) => `<div class="srow"><div class="grow"><b>${label}</b><small class="muted">${help}</small></div><button class="switch ${S.settings[k] ? "on" : ""}" data-act="toggle" data-v="${k}" aria-label="${label}"></button></div>`;
   // Settings blueprint 1.1.0: each section's rows in one card (.grp), built right after every render.
@@ -2895,7 +2929,7 @@ function clientApp() {
       }
       case "toggle": S.settings[v] = !S.settings[v]; send("set", { k: v, v: S.settings[v] }); renderCfg(); renderAI(); break;
       case "cfgopen": cfgOpen = true; renderCfg(); break;
-      case "cfgclose": cfgOpen = false; cfgArmed = false; renderCfg(); break;
+      case "cfgclose": bpOpen = null; renderBp(); cfgOpen = false; cfgArmed = false; renderCfg(); break;
       case "cfgreset": { const d = cfgItem(t.dataset.k); S.cfg[d.k] = d.def; send("cfg", { k: d.k, v: null }); renderCfg(); break; }
       case "cfgstep": {
         const d = cfgItem(t.dataset.k), step = d.step || 1;
@@ -2922,7 +2956,7 @@ function clientApp() {
         break;
       }
       case "updcheck": { const m = $("#updmsg"); if (m) m.textContent = "Checking…"; send("updcheck", {}, (ok, msg) => { const mm = $("#updmsg"); if (mm) mm.textContent = msg; }); break; }
-      case "openurl": send("openurl", { v }); break;
+      case "bpabout": bpOpen = v; renderBp(); break;
       case "aiopen": aiOpen = true; renderAI(); break;
       case "aiclose": aiOpen = false; renderAI(); break;
       case "aikey": case "aitest": case "aiprov": send(act, { v }); break;
@@ -3045,6 +3079,19 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .sheet{position:fixed;inset:0;z-index:10;background:var(--paper);transform:translateY(102%);transition:transform .28s ease;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .sheet.open{transform:none}
 #itemsheet{z-index:11} #batchsheet{z-index:12} #cfgsheet{z-index:13} #vsheet,#convsheet{z-index:11}
+#bpabout{position:fixed;inset:0;z-index:15;pointer-events:none}
+#bpabout.open{pointer-events:auto}
+.bp-dim{position:absolute;inset:0;background:rgba(0,0,0,.45);opacity:0;transition:opacity .2s}
+#bpabout.open .bp-dim{opacity:1}
+.bp-card{position:absolute;left:0;right:0;bottom:0;max-height:86vh;overflow-y:auto;-webkit-overflow-scrolling:touch;background:var(--paper);color:var(--ink);border-top:1px solid var(--rule);border-radius:20px 20px 0 0;padding:18px 20px calc(env(safe-area-inset-bottom) + 28px);transform:translateY(102%);transition:transform .28s ease}
+#bpabout.open .bp-card{transform:none}
+.bp-top{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
+.bp-top .grow{flex:1;min-width:0}
+.bp-kick{display:block;font:700 calc(11.5px * var(--ts))/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--signal)}
+.bp-card h2{font:700 calc(24px * var(--ts))/1.15 var(--display);margin:4px 0 4px}
+.bp-l{font:700 calc(12.5px * var(--ts))/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:20px 0 6px}
+.bp-p{margin:0;font-size:calc(16px * var(--ts));line-height:1.45}
+@media (prefers-reduced-motion: reduce){.bp-card,.bp-dim{transition:none}}
 .tabs .n.hot{background:var(--signal);color:var(--paper);border-radius:999px;padding:0 7px;font-weight:700}
 .acct-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:4px 0 10px}
 .unread-line{margin:0 0 10px;font-size:calc(15px * var(--ts))}
