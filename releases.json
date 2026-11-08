@@ -4,6 +4,41 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.9.0",
+      "date": "2026-11-08",
+      "title": "See every photo large",
+      "highlights": [
+        {
+          "icon": "🔍",
+          "title": "Photos, large",
+          "text": "Tap any photo you took to see it full screen; swipe through the rest."
+        },
+        {
+          "icon": "🗑️",
+          "title": "Remove from the session",
+          "text": "Drop a photo you don't want before the items are made, or move it to another item."
+        },
+        {
+          "icon": "✨",
+          "title": "Neater cards",
+          "text": "The ready and needs-a-look signs sit cleanly on the photo, and the scan stays inside it."
+        }
+      ],
+      "changes": [
+        "Photo viewer: tap a photo in the camera tray, in New photos or in an item to see it full screen (at full size), with ‹ › and swipe to go through them",
+        "In the viewer: remove the photo (two taps) from the photo session, from New photos or from the item; in New photos also move it to another item or a new one",
+        "The camera tray shows the photos taken so far as small thumbnails",
+        "New photos: a tap on a photo opens it (moving is in the viewer), the hint says so",
+        "The ✓ and ! signs on a card are drawn icons on the front photo's top-right corner, with a ring in the card's colour, instead of overlapping the card's edge",
+        "The scan line and glow while a photo is worked on stay inside the photo's rounded frame, never over the buttons under it",
+        "Tests: tests/cases/04-photo-viewer.test.js"
+      ],
+      "fixes": [
+        "The scan effect on a photo ran past its edges onto the buttons below and was cut off at the top",
+        "The ready sign on a card covered the photo and the card's border"
+      ]
+    },
+    {
       "version": "1.8.0",
       "date": "2026-11-08",
       "title": "Barcodes that read, posts in line",

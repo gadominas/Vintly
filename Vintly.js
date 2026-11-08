@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -2117,6 +2117,29 @@ async function handle(m) {
       return finishBatch(groups.length ? groups : batch.groups);
     }
     case "batchcancel": clearBatch(); return push();
+    case "batchphoto": case "itemphoto": {   // a photo at full size for the viewer
+      let b64 = "";
+      try {
+        if (m.type === "batchphoto") { if (batch && batch.photos.some(p => p.id === m.pid)) b64 = await readB64(photoFile(BATCH, m.pid, "")); }
+        else { const ph = it && it.photos.find(x => x.id === m.pid); if (ph && !ph.gone) b64 = await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : "")); }
+      } catch (e) {}
+      return call("__done", m.req, !!b64, b64);
+    }
+    case "batchrm": {   // a photo out of the batch; the page sends its arrangement so nothing you moved is lost
+      if (!batch) return push();
+      const pid = String(m.pid || "");
+      if (!batch.photos.some(p => p.id === pid)) return push();
+      batch.photos = batch.photos.filter(p => p.id !== pid);
+      for (const k of ["", "t"]) { const f = photoFile(BATCH, pid, k); try { if (fm.fileExists(f)) fm.remove(f); } catch (e) {} delete thumbCache[f]; }
+      if (!batch.photos.length) { clearBatch(); return push(); }
+      const ids = new Set(batch.photos.map(p => p.id)), oldG = batch.groups, oldN = batch.names || [];
+      let groups = (Array.isArray(m.groups) ? m.groups : oldG).map(g => (Array.isArray(g) ? g : []).filter(id => ids.has(id))).filter(g => g.length);
+      const seen = new Set(groups.flat()); batch.photos.forEach(p => { if (!seen.has(p.id)) groups.push([p.id]); });
+      batch.names = groups.map(g => { const k = oldG.findIndex(og => og.some(id => g.includes(id))); return k >= 0 ? oldN[k] || "" : ""; });
+      batch.groups = groups;
+      track("batch_photo_removed");
+      return push();
+    }
 
     // ── one item ──
     case "notes": if (it) { it.notes = clip(m.v, 1000); write("items", items); } return;
@@ -2239,7 +2262,9 @@ function clientApp() {
   let importTarget = "", tray = 0, importing = 0, panel = null;   // panel: "cat" or "brand", open inside the item sheet
   let catRes = null, brandRes = null, brandQ = "", catQ = "";
   const posting = {};   // item id → { left, t }: a Post tapped on a card goes after a short count, so it can be undone
-  let mainDirty = false;   // the list waits to redraw while you type a price on a card
+  let mainDirty = false;
+  let pv = null;   // the photo viewer: { kind: "tray" | "batch" | "item", key, item }
+  const pvFull = {}, pvAsked = new Set();   // full-size photos, by key   // the list waits to redraw while you type a price on a card
   let bg = null, bgSig = "", bgPick = null;   // the batch's groups as you arrange them
   const aiLoading = new Set();
   const $ = s => document.querySelector(s);
@@ -2371,7 +2396,7 @@ function clientApp() {
   document.addEventListener("touchstart", e => {
     ptrY = null;
     if (ptrAt || e.touches.length !== 1 || document.body.classList.contains("locked") || window.scrollY > 0) return;
-    if (e.target.closest && e.target.closest(".sheet, #upd, #aiinv, #decoview, input, textarea, select")) return;
+    if (e.target.closest && e.target.closest(".sheet, #upd, #aiinv, #decoview, #phview, input, textarea, select")) return;
     ptrY = e.touches[0].clientY; ptrD = 0;
   }, { passive: true });
   document.addEventListener("touchmove", e => {
@@ -2723,12 +2748,12 @@ function clientApp() {
     const h = Math.round(m / 60); if (h < 24) return h + " h ago";
     const d = Math.round(h / 24); return d === 1 ? "yesterday" : d < 7 ? d + " days ago" : new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
-  function lockBody() { document.body.classList.toggle("locked", !!(openId || cfgOpen || aiOpen || vOpen || convOpen || (batchOpen && S.batch))); }
+  function lockBody() { document.body.classList.toggle("locked", !!(openId || cfgOpen || aiOpen || vOpen || convOpen || pv || (batchOpen && S.batch))); }
   function arm2(key, rerender) { armed = key; rerender(); setTimeout(() => { if (armed === key) { armed = null; rerender(); } }, 3500); }
 
   // ---- the main page ----
   const todo = () => S.items.filter(x => x.status !== "posted"), posted = () => S.items.filter(x => x.status === "posted");
-  function renderAll() { renderTop(); render(); renderItem(); renderBatch(); renderTray(); renderAI(); renderCfg(); renderVItem(); renderConv(); }
+  function renderAll() { renderTop(); render(); renderItem(); renderBatch(); renderTray(); renderAI(); renderCfg(); renderVItem(); renderConv(); renderPv(); }
   function renderTop() {
     $("#status").innerHTML = S.vinted.ok ? `Signed in to ${esc(S.vinted.site)}` : `<button class="link small" data-act="vsignin">Sign in to ${esc(S.vinted.site)}</button>`;
     const V = S.vt || {}, live = (V.wardrobe || []).filter(w => !w.sold && !w.draft).length;
@@ -2788,7 +2813,8 @@ function clientApp() {
     return `<div class="card pc ${bad ? "bad" : ready ? "ready" : ""}">
       <button class="pc-top" data-act="open" data-v="${x.id}">
         <span class="thumbs">${th.length ? th.map(p => `<img src="${thumb(p)}" alt="">`).join("") : `<i class="noimg"></i>`}${x.photos.length > 3 ? `<em>+${x.photos.length - 3}</em>` : ""}
-          ${idle && bad ? `<i class="pc-flag bad" aria-label="Needs a look">!</i>` : ready ? `<i class="pc-flag ok" aria-label="Ready to post">✓</i>` : ""}</span>
+          ${idle && bad ? `<i class="pc-flag bad" role="img" aria-label="Needs a look"><svg viewBox="0 0 16 16"><path d="M8 3.6v5.3"/><circle cx="8" cy="12.2" r=".4"/></svg></i>`
+            : ready ? `<i class="pc-flag ok" role="img" aria-label="Ready to post"><svg viewBox="0 0 16 16"><path d="M4.2 8.4l2.5 2.5 5-5.3"/></svg></i>` : ""}</span>
         <span class="c-b"><b class="c-t">${esc(title)}</b><small class="muted">${L.catalogPath ? esc(L.catalogPath.split(" › ").slice(-1)[0]) : "Added " + rel(x.created)}</small>
           <span class="chip st-${k}">${st}${x.busy ? " " + Math.round((x.busy.p || 0) * 100) + "%" : ""}</span>${x.busy ? `<span class="pbar mini"><i style="width:${Math.max(3, Math.round((x.busy.p || 0) * 100))}%"></i></span><small class="muted pc-now">${esc((x.busy.steps[x.busy.steps.length - 1] || {}).t || "")}</small>` : ""}</span>
         ${idle && prepared ? `<span class="pc-chev" aria-hidden="true">›</span>` : `<span class="c-p">${L.price ? money(L.price) : ""}</span>`}</button>
@@ -2907,7 +2933,9 @@ function clientApp() {
     if (importing) { el.hidden = false; el.innerHTML = `<span class="busy-dot"></span><b>Bringing in ${importing} photo${importing === 1 ? "" : "s"}…</b>`; return; }
     if (!tray) { el.hidden = true; el.innerHTML = ""; return; }
     el.hidden = false;
-    el.innerHTML = `<b>📷 ${tray} photo${tray === 1 ? "" : "s"}</b><button class="sm" data-act="cam">Take another</button><button class="sm primary" data-act="traydone">Done</button>`;
+    el.innerHTML = `<div class="tr-ph">${(window.__imp || []).map((p, i) => `<button class="tr-th" data-act="pvtray" data-v="${i}" aria-label="See photo ${i + 1}"><img src="data:image/jpeg;base64,${p.t}" alt=""></button>`).join("")}</div>
+      <b>📷 ${tray} photo${tray === 1 ? "" : "s"}</b><button class="sm" data-act="cam">Take another</button><button class="sm primary" data-act="traydone">Done</button>`;
+    const strip = el.querySelector(".tr-ph"); if (strip) strip.scrollLeft = strip.scrollWidth;   // the newest in view
   }
 
   // ---- a batch of new photos: which photos are which item ----
@@ -2921,17 +2949,90 @@ function clientApp() {
     syncBatch();
     el.classList.toggle("open", !!(batchOpen && S.batch)); lockBody();
     if (!(batchOpen && S.batch)) return;
-    const B = S.batch, tOf = id => (B.photos.find(p => p.id === id) || {}).t || "";
+    const B = S.batch, tOf = bThumb;
     el.innerHTML = `<div class="sh-head"><h2>New photos</h2><button class="link" data-act="batchcancel">Cancel</button></div><div class="sh-body">
-      <p class="hint">${B.photos.length} photos. Each group below becomes one item. Tap a photo, then tap the item it belongs to.</p>
+      <p class="hint">${B.photos.length} photo${B.photos.length === 1 ? "" : "s"}. Each group below becomes one item. Tap a photo to see it large, move it to another item or remove it.</p>
       ${B.sorting ? `<div class="working"><span class="busy-dot"></span>✦ Sorting your photos into items…</div>` : ""}
       ${bg.map((g, i) => `<div class="grp-item ${bgPick ? "can" : ""}" data-act="bgto" data-v="${i}"><div class="gi-h"><b>Item ${i + 1}</b>${B.names[i] && B.by ? `<span class="badge-ai">✦ ${esc(B.names[i])}</span>` : ""}<small class="muted">${g.length} photo${g.length === 1 ? "" : "s"}</small></div>
-        <div class="gi-ph">${g.map(id => `<img src="${tOf(id)}" class="${bgPick === id ? "pick" : ""}" data-act="bgpick" data-v="${id}" alt="">`).join("")}</div></div>`).join("")}
+        <div class="gi-ph">${g.map(id => `<img src="${tOf(id)}" class="${bgPick === id ? "pick" : ""}" data-act="pvbatch" data-v="${id}" alt="Photo">`).join("")}</div></div>`).join("")}
       ${bgPick ? `<button class="grp-item new can" data-act="bgto" data-v="new">+ A new item</button>` : ""}
       <div class="aic-btns">${S.settings.hasKey ? `<button class="sm" data-act="batchsort" ${B.sorting ? "disabled" : ""}>✦ Sort with AI</button>` : ""}
         <button class="sm" data-act="bgall">All one item</button><button class="sm" data-act="bgeach">One item per photo</button></div>
       <button class="primary wide" data-act="batchmake" ${B.sorting ? "disabled" : ""}>Add ${bg.filter(g => g.length).length} item${bg.filter(g => g.length).length === 1 ? "" : "s"}</button>
     </div>`;
+  }
+
+  // ---- the photo viewer: a photo large, the others a swipe away; remove it, or move it to another item ----
+  const bThumb = id => ((S.batch && S.batch.photos.find(p => p.id === id)) || {}).t || "";
+  function pvList() {
+    if (!pv) return [];
+    if (pv.kind === "tray") return (window.__imp || []).map((p, i) => ({ key: "t" + i, src: "data:image/jpeg;base64," + p.b64, i }));
+    if (pv.kind === "batch") { const out = []; (bg || []).forEach((g, gi) => g.forEach(id => out.push({ key: id, src: pvFull[id] || bThumb(id), group: gi }))); return out; }
+    const x = byId(pv.item);
+    return x ? x.photos.filter(p => !p.gone).map((p, i) => ({ key: p.id, src: pvFull[p.id + ":" + (p.use === "clean" && p.ct ? "c" : "o")] || thumb(p), main: i === 0, p })) : [];
+  }
+  function pvLoad(e) {   // the full-size photo, once (the small one shows meanwhile)
+    if (!pv || pv.kind === "tray") return;
+    const k = pv.kind === "batch" ? e.key : e.key + ":" + (e.p.use === "clean" && e.p.ct ? "c" : "o");
+    if (pvFull[k] || pvAsked.has(k)) return;
+    pvAsked.add(k);
+    send(pv.kind === "batch" ? "batchphoto" : "itemphoto", { pid: e.key, id: pv.item || "" }, (ok, b64) => { pvAsked.delete(k); if (ok && b64) { pvFull[k] = "data:image/jpeg;base64," + b64; renderPv(); } });
+  }
+  function pvEl() {
+    let el = $("#phview");
+    if (!el) {
+      el = document.createElement("div"); el.id = "phview"; el.hidden = true; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-label", "Photo");
+      document.body.appendChild(el);
+      let x0 = null;   // a swipe left or right moves to the next photo
+      el.addEventListener("touchstart", e => { x0 = e.target.closest(".pv-stage") ? e.touches[0].clientX : null; }, { passive: true });
+      el.addEventListener("touchend", e => { if (x0 == null) return; const d = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(d) > 50) pvGo(d < 0 ? 1 : -1); }, { passive: true });
+    }
+    return el;
+  }
+  function pvGo(n) {
+    const L = pvList(), i = L.findIndex(e => e.key === pv.key);
+    if (L[i + n]) { pv.key = L[i + n].key; armed = null; renderPv(); }
+  }
+  function renderPv() {
+    const el = pvEl();
+    if (pv && pv.kind === "batch" && !(S.batch && batchOpen)) pv = null;
+    if (pv && pv.kind === "item" && !byId(pv.item)) pv = null;
+    if (pv && pv.kind === "tray" && !tray) pv = null;
+    const L = pvList();
+    if (pv && !L.length) pv = null;
+    el.hidden = !pv; lockBody();
+    if (!pv) { el.innerHTML = ""; return; }
+    let i = L.findIndex(e => e.key === pv.key); if (i < 0) { i = Math.min(L.length - 1, pv.at || 0); pv.key = L[i].key; }
+    pv.at = i;
+    const e = L[i], rmKey = "pvrm" + e.key;
+    pvLoad(e);
+    const where = pv.kind === "batch" ? ` · Item ${e.group + 1}` : e.main ? " · Main photo" : "";
+    const moves = pv.kind === "batch" ? (bg || []).map((g, gi) => gi === e.group ? "" : `<button data-act="pvmove" data-v="${gi}">→ Item ${gi + 1}</button>`).join("") + (bg[e.group].length > 1 ? `<button data-act="pvmove" data-v="new">＋ A new item</button>` : "") : "";
+    el.innerHTML = `<div class="pv-top"><span>Photo ${i + 1} of ${L.length}${where}</span><button class="pv-close" data-act="pvclose">Close</button></div>
+      <div class="pv-stage"><img src="${e.src}" alt="Photo ${i + 1}">
+        <button class="pv-nav prev" data-act="pvgo" data-v="-1" aria-label="Previous photo" ${i ? "" : "disabled"}>‹</button>
+        <button class="pv-nav next" data-act="pvgo" data-v="1" aria-label="Next photo" ${i < L.length - 1 ? "" : "disabled"}>›</button></div>
+      <div class="pv-acts">${moves ? `<div class="pv-move">${moves}</div>` : ""}
+        <button class="pv-rm ${armed === rmKey ? "armed" : ""}" data-act="pvrm" data-v="${esc(e.key)}">${armed === rmKey ? "Tap again to remove it" : pv.kind === "item" ? "Remove this photo from the item" : "Remove this photo"}</button></div>`;
+  }
+  function pvRemove(key) {
+    const L = pvList(), i = L.findIndex(e => e.key === key); if (i < 0) return;
+    pv.key = (L[i + 1] || L[i - 1] || {}).key;
+    if (pv.kind === "tray") {
+      window.__imp.splice(L[i].i, 1); tray = Math.max(0, tray - 1);
+      if (pv.key) pv.key = "t" + Math.min(i, window.__imp.length - 1);
+      renderTray();
+    } else if (pv.kind === "batch") {
+      bg = bg.map(g => g.filter(id => id !== key)).filter(g => g.length);
+      if (!bg.length) { batchOpen = false; send("batchcancel", {}); }
+      else send("batchrm", { pid: key, groups: bg });
+      renderBatch();
+    } else {
+      const x = byId(pv.item); if (x) x.photos = x.photos.filter(p => p.id !== key);
+      send("photorm", { id: pv.item, pid: key }); renderItem();
+    }
+    window.toast("Photo removed");
+    renderPv();
   }
 
   // ---- one item ----
@@ -3028,7 +3129,7 @@ function clientApp() {
     if (x.status === "posted") return x.cover ? `<div class="strip"><div class="ph"><img src="${x.cover}" alt=""></div></div>` : "";
     const b = x.busy, on = p => !!b && (b.ph || []).includes(p.id);
     return `<div class="strip">${x.photos.map((p, i) => `<div class="ph ${on(p) ? "scan ph-" + esc(b.phase || "") : ""}" data-p="${p.id}">
-        <img src="${thumb(p) || ""}" alt="Photo ${i + 1}"><i class="scanl"></i>${i === 0 ? `<span class="ph-main">Main</span>` : ""}
+        <div class="ph-img" data-act="pvitem" data-v="${p.id}" role="button" aria-label="See photo ${i + 1} large"><img src="${thumb(p) || ""}" alt="Photo ${i + 1}"><i class="scanl"></i>${i === 0 ? `<span class="ph-main">Main</span>` : ""}</div>
         ${p.clean ? `<div class="seg mini"><button class="${p.use === "clean" ? "on" : ""}" data-act="phuse" data-p="${p.id}" data-v="clean">${p.studio ? "✦ Studio" : "Clean"}</button><button class="${p.use !== "clean" ? "on" : ""}" data-act="phuse" data-p="${p.id}" data-v="orig">Original</button></div>`
           : p.err ? `<small class="ph-err" title="${esc(p.err)}">Not cleaned</small>` : ""}
         <div class="ph-tools"><button data-act="phmove" data-p="${p.id}" data-v="-1" aria-label="Earlier" ${i ? "" : "disabled"}>‹</button>
@@ -3398,7 +3499,21 @@ function clientApp() {
       case "conv": convOpen = true; replyDraft = ""; S.vt.conv = { id: v, msgs: null }; S.vt.loading = Object.assign({}, S.vt.loading, { conv: true }); renderConv(); send("conv", { v }); break;
       case "convclose": convOpen = false; replyDraft = ""; send("convclose", {}); renderConv(); render(); renderTop(); break;
       case "replysend": { const ta = $("#replybox"), text = ta ? ta.value.trim() : ""; if (!text || !S.vt.conv) break; replyDraft = ""; ta.value = ""; send("reply", { id: S.vt.conv.id, text, anyway: v === "anyway" }); break; }
-      case "bgpick": bgPick = bgPick === v ? null : v; renderBatch(); e.stopPropagation(); return;
+      case "pvtray": pv = { kind: "tray", key: "t" + v }; armed = null; renderPv(); break;
+      case "pvbatch": pv = { kind: "batch", key: v }; armed = null; renderPv(); e.stopPropagation(); return;
+      case "pvitem": pv = { kind: "item", key: v, item: openId }; armed = null; renderPv(); break;
+      case "pvclose": pv = null; armed = null; renderPv(); break;
+      case "pvgo": pvGo(+v); break;
+      case "pvrm": if (armed === "pvrm" + v) { armed = null; pvRemove(v); } else arm2("pvrm" + v, renderPv); break;
+      case "pvmove": {
+        if (!pv || !bg) break;
+        const id = pv.key;
+        bg = bg.map(g => g.filter(y => y !== id));
+        if (v === "new") bg.push([id]); else bg[+v].push(id);
+        bg = bg.filter(g => g.length); renderBatch(); renderPv();
+        window.toast(v === "new" ? "Moved to a new item" : `Moved to Item ${bg.findIndex(g => g.includes(id)) + 1}`);
+        break;
+      }
       case "bgto": {
         if (!bgPick) break;
         bg = bg.map(g => g.filter(id => id !== bgPick));
@@ -3573,8 +3688,10 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .pc-top{display:flex;align-items:center;gap:12px;width:100%;text-align:left}
 .pc-chev{flex:none;font-size:calc(22px * var(--ts));color:var(--muted)}
 .pc-now{display:block}
-.pc-flag{position:absolute;left:-6px;top:-6px;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:800 13px/1 var(--num);font-style:normal;border:2px solid var(--sheet);z-index:1}
-.pc-flag.bad{background:var(--amber);color:#1a1300} .pc-flag.ok{background:var(--signal);color:var(--paper)}
+.pc-flag{position:absolute;right:-7px;top:-7px;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2.5px var(--sheet),0 2px 6px rgba(0,0,0,.35);z-index:1}
+.pc-flag svg{width:14px;height:14px;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.pc-flag.ok{background:var(--signal)} .pc-flag.ok svg{stroke:#0E1116}
+.pc-flag.bad{background:var(--amber)} .pc-flag.bad svg{stroke:#1a1300} .pc-flag.bad circle{fill:#1a1300;stroke-width:2.2}
 .pc-iss{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
 .pc-iss li{display:flex;gap:7px;align-items:flex-start;font-size:calc(13px * var(--ts));line-height:1.35;border-radius:9px;padding:7px 9px;background:var(--paper);color:var(--ink-2)}
 .pc-iss li.bad{background:var(--amber-wash);color:var(--ink)}
@@ -3611,7 +3728,27 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .empty p{color:var(--ink-2);margin:0 0 18px}
 .empty-mark{width:84px;height:84px;border-radius:20px;background:#0E1116}
 #tray{position:fixed;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 12px);z-index:9;display:flex;align-items:center;gap:10px;background:var(--sheet);border:1px solid var(--rule);border-radius:16px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
+#tray{flex-wrap:wrap}
 #tray b{flex:1;font-size:calc(15px * var(--ts))}
+.tr-ph{flex-basis:100%;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:1px}
+.tr-ph::-webkit-scrollbar{display:none}
+.tr-th{flex:none;width:44px;height:56px;border-radius:8px;overflow:hidden;box-shadow:0 0 0 1px var(--rule)}
+.tr-th img{width:100%;height:100%;object-fit:cover;display:block}
+.tr-ph:empty{display:none}
+#phview{position:fixed;inset:0;z-index:40;background:#000;color:#F6F7F9;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#phview[hidden]{display:none}
+.pv-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;font-size:calc(14px * var(--ts));color:#C9CED6}
+.pv-close{color:#5EEAD4;font-weight:600;font-size:calc(16px * var(--ts));padding:6px 2px}
+.pv-stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;touch-action:pan-y}
+.pv-stage img{max-width:100%;max-height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-select:none}
+.pv-nav{position:absolute;top:50%;transform:translateY(-50%);width:42px;height:64px;border-radius:12px;background:rgba(255,255,255,.14);color:#fff;font-size:30px;line-height:1}
+.pv-nav.prev{left:8px} .pv-nav.next{right:8px} .pv-nav[disabled]{opacity:0;pointer-events:none}
+.pv-acts{display:flex;flex-direction:column;gap:10px;padding:12px 16px 16px}
+.pv-move{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
+.pv-move button{flex:none;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,.12);color:#F6F7F9;font-weight:600;font-size:calc(14px * var(--ts))}
+.pv-rm{width:100%;padding:13px;border-radius:10px;border:1px solid rgba(248,113,113,.5);color:#FCA5A5;font-weight:600;font-size:calc(15px * var(--ts))}
+.pv-rm.armed{background:#DC2626;color:#fff;border-color:#DC2626}
+.ph-img{cursor:zoom-in} .gi-ph img{cursor:zoom-in}
 #tray[hidden]{display:none}
 
 /* sheets (app-blueprints · settings) */
@@ -3719,8 +3856,10 @@ button.srow{width:100%;text-align:left}
 .strip{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 8px;margin:0 -2px;scrollbar-width:none}
 .strip::-webkit-scrollbar{display:none}
 .ph{position:relative;flex:none;width:118px;display:flex;flex-direction:column;gap:5px}
-.ph img{width:118px;height:150px;object-fit:cover;border-radius:12px;background:var(--sheet);border:1px solid var(--rule);display:block}
-.ph-main{position:absolute;left:6px;top:6px;font-size:calc(11px * var(--ts));font-weight:700;background:var(--ink);color:var(--paper);border-radius:6px;padding:1px 6px}
+.ph-img{position:relative;width:118px;height:150px;border-radius:12px;overflow:hidden;background:var(--sheet);isolation:isolate}   /* the scan line and glow stay inside the photo */
+.ph-img img{width:100%;height:100%;object-fit:cover;display:block}
+.ph-img::after{content:"";position:absolute;inset:0;border-radius:12px;border:1px solid var(--rule);pointer-events:none}
+.ph-main{position:absolute;z-index:2;left:6px;top:6px;font-size:calc(11px * var(--ts));font-weight:700;background:var(--ink);color:var(--paper);border-radius:6px;padding:1px 6px}
 #decoview{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:18px}
 #decoview[hidden]{display:none}
 .dv-box{background:var(--sheet);border-radius:18px;padding:14px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
@@ -3783,7 +3922,7 @@ textarea.fin{resize:vertical}
 .bb-ph .scanl{display:block}
 .bb-ph.read .scanl,.ph.ph-read .scanl{background:linear-gradient(180deg,rgba(251,191,36,0),rgba(251,191,36,.5) 70%,#FDE68A 72%,rgba(251,191,36,0) 74%)}
 .bb-ph.search .scanl,.ph.ph-search .scanl{background:linear-gradient(180deg,rgba(167,139,250,0),rgba(167,139,250,.55) 70%,#DDD6FE 72%,rgba(167,139,250,0) 74%)}
-.ph.ph-search img{box-shadow:0 0 0 2px #A78BFA,0 0 18px rgba(167,139,250,.5)}
+.ph.ph-search .ph-img::after{--glow:#A78BFA}
 .specs{margin:-4px 0 14px;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:12px}
 .sp-h{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
 .specs dl{display:grid;grid-template-columns:minmax(90px,40%) 1fr;gap:5px 12px;margin:0;font-size:calc(14px * var(--ts))}
@@ -3791,12 +3930,12 @@ textarea.fin{resize:vertical}
 .sp-src{margin:10px 0 0;font-size:calc(12px * var(--ts));color:var(--muted)}
 .sp-btns{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px}
 .bb-ph.upload .scanl,.ph.ph-upload .scanl{animation:scanUp 1s linear infinite;background:linear-gradient(0deg,rgba(96,165,250,0),rgba(96,165,250,.55) 70%,#BFDBFE 72%,rgba(96,165,250,0) 74%)}
-.ph .scanl{height:52px;top:0;border-radius:12px 12px 0 0}
+.ph .scanl{z-index:1;height:52px;top:0}
 .ph.scan .scanl{display:block;animation-name:scanPh}
 .ph.ph-upload .scanl{animation:scanPhUp 1s linear infinite}
-.ph.scan img{box-shadow:0 0 0 2px var(--signal),0 0 18px rgba(45,212,191,.55);animation:phPulse 1.2s ease-in-out infinite alternate}
-.ph.ph-read img{box-shadow:0 0 0 2px #FBBF24,0 0 18px rgba(251,191,36,.5)}
-.ph.ph-upload img{box-shadow:0 0 0 2px #60A5FA,0 0 18px rgba(96,165,250,.5)}
+.ph.scan .ph-img::after{border:2px solid var(--glow,var(--signal));box-shadow:inset 0 0 16px var(--glow,var(--signal));animation:phGlow 1.2s ease-in-out infinite alternate}
+.ph.ph-read .ph-img::after{--glow:#FBBF24} .ph.ph-upload .ph-img::after{--glow:#60A5FA}
+@keyframes phGlow{from{opacity:.65}to{opacity:1}}
 .pbar{position:relative;height:12px;border-radius:999px;background:var(--rule);overflow:hidden;margin:12px 0 2px}
 .pbar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px;overflow:hidden;background:linear-gradient(90deg,#0FA192,#2DD4BF,#5EEAD4,#2DD4BF,#0FA192);background-size:200% 100%;
   transition:width .9s cubic-bezier(.2,.8,.2,1);animation:pFlow 2.2s linear infinite;box-shadow:0 0 14px rgba(45,212,191,.6)}
@@ -3809,9 +3948,8 @@ textarea.fin{resize:vertical}
 @keyframes pSweep{to{left:100%}}
 @keyframes scanY{from{transform:translateY(-70%)}to{transform:translateY(230%)}}
 @keyframes scanUp{from{transform:translateY(300%)}to{transform:translateY(-100%)}}
-@keyframes scanPh{from{transform:translateY(-30px)}to{transform:translateY(128px)}}
-@keyframes scanPhUp{from{transform:translateY(128px)}to{transform:translateY(-52px)}}
-@keyframes phPulse{to{box-shadow:0 0 0 3px var(--signal),0 0 26px rgba(45,212,191,.8)}}
+@keyframes scanPh{from{transform:translateY(-52px)}to{transform:translateY(150px)}}
+@keyframes scanPhUp{from{transform:translateY(150px)}to{transform:translateY(-52px)}}
 @keyframes bbBreathe{50%{filter:brightness(1.08) saturate(1.1)}}
 @keyframes orb{to{transform:scale(.8);opacity:.75}}
 /* Pull to refresh: drag the list down from the top */
@@ -3958,7 +4096,7 @@ textarea.fin{resize:vertical}
   .splash *{animation:none!important;opacity:1!important;transform:none!important;stroke-dashoffset:0!important}
   .splash{animation:spOut .3s ease 1.6s forwards!important}
   .sheet,#aisheet,#toast,.switch,.switch::after,.bar i{transition:none}
-  .pbar i,.pbar i::after,.pbar::after,.scanl,.bb-ph img,.orb,.ph.scan img{animation:none!important}
+  .pbar i,.pbar i::after,.pbar::after,.scanl,.bb-ph img,.orb,.ph.scan .ph-img::after{animation:none!important}
   #ptr.busy .ptr-ico{animation-duration:2.4s}
   .scanl{opacity:.6;transform:translateY(80%)}
 }

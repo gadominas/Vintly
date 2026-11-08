@@ -2,6 +2,27 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.9.0 (2026-11-08): See every photo large
+
+- 🔍 **Photos, large**: Tap any photo you took to see it full screen; swipe through the rest.
+- 🗑️ **Remove from the session**: Drop a photo you don't want before the items are made, or move it to another item.
+- ✨ **Neater cards**: The ready and needs-a-look signs sit cleanly on the photo, and the scan stays inside it.
+
+**Changes**
+
+- Photo viewer: tap a photo in the camera tray, in New photos or in an item to see it full screen (at full size), with ‹ › and swipe to go through them
+- In the viewer: remove the photo (two taps) from the photo session, from New photos or from the item; in New photos also move it to another item or a new one
+- The camera tray shows the photos taken so far as small thumbnails
+- New photos: a tap on a photo opens it (moving is in the viewer), the hint says so
+- The ✓ and ! signs on a card are drawn icons on the front photo's top-right corner, with a ring in the card's colour, instead of overlapping the card's edge
+- The scan line and glow while a photo is worked on stay inside the photo's rounded frame, never over the buttons under it
+- Tests: tests/cases/04-photo-viewer.test.js
+
+**Fixes**
+
+- The scan effect on a photo ran past its edges onto the buttons below and was cut off at the top
+- The ready sign on a card covered the photo and the card's border
+
 ## 1.8.0 (2026-11-08): Barcodes that read, posts in line
 
 - 🏷️ **Barcodes that read**: A real barcode reader scans the stripes, zooms in where AI saw the code, and checks every digit.

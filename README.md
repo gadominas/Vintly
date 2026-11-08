@@ -102,7 +102,8 @@ What else you need:
 | To… | Do this |
 | --- | --- |
 | Add items | Tap **Take photos** or **Choose photos**; take a few photos of each thing. Or share photos to Vintly from Photos |
-| Fix the sorting | Tap a photo, then the item it belongs to (or **+ A new item**). **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
+| See a photo large | Tap it: in the camera tray, in New photos or in an item. Swipe or ‹ › for the others; **Remove this photo** (two taps) takes it out |
+| Fix the sorting | Tap a photo, then **→ Item 2** (or **＋ A new item**) in the viewer. **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
 | Get listings for a pile | After **Add … items**, each item is prepared in turn (the bar above the list shows how far; **Stop** ends the line). **✦ Prepare all** prepares items that weren't. Turn it off in Settings › AI settings › Prepare new items right away |
 | Get a barcode read | Take one sharp close-up with the barcode filling most of the photo. Vintly scans the stripes, zooms in where ✦ AI saw it, and only uses digits whose check digit is right |
 | Fix an error | Errors are in plain words, on the card and by the button that failed. Tap **✦ Fix with AI**: AI changes what Vinted didn't accept (or fills what's missing) and lists the changes; then post again. Vinted's own answer is under **Details** |
