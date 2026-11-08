@@ -106,6 +106,7 @@ What else you need:
 | Fix the sorting | Tap a photo, then **→ Item 2** (or **＋ A new item**) in the viewer. **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
 | Get listings for a pile | After **Add … items**, each item is prepared in turn (the bar above the list shows how far; **Stop** ends the line). **✦ Prepare all** prepares items that weren't. Turn it off in Settings › AI settings › Prepare new items right away |
 | Get a barcode read | Take one sharp close-up with the barcode filling most of the photo. Vintly scans the stripes, zooms in where ✦ AI saw it, and only uses digits whose check digit is right |
+| Report a crash | Settings › Diagnostics › **Copy the log**, then paste it into a message. After a crash, the next start offers the same on the To post list. Turn **Detailed log** off once the problem is found |
 | Fix an error | Errors are in plain words, on the card and by the button that failed. Tap **✦ Fix with AI**: AI changes what Vinted didn't accept (or fills what's missing) and lists the changes; then post again. Vinted's own answer is under **Details** |
 | Post from the list | A ready card (✓) has the price with **−** and **+** (or type it) and **Post**; tap **Undo** within 3 seconds to stop it. A card with ⚠ says what's wrong; **Fix ›** opens it |
 | Get a listing | Open an item, add notes if you know something the photos don't show (size, flaws, "never worn"), tap **Prepare**. Vintly cleans the photos, writes the listing, fills Vinted's fields and sets a price |

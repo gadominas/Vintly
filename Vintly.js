@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -262,7 +262,55 @@ function startLog(msg) {
     const old = lfm.fileExists(LOG_PATH) ? lfm.readString(LOG_PATH).split("\n").slice(-60) : [];
     lfm.writeString(LOG_PATH, old.concat(line).join("\n"));
   } catch (e) {}
+  trace("log: " + msg, /fail|error|couldn't|damaged|didn't/i.test(msg));
 }
+// ---------- the detailed log (trace): to find a crash ----------
+// Every step that matters, with times and sizes, in a file on this iPhone (not iCloud). Lines are written out at
+// once before heavy work (a photo going to the page, an AI request), so the last line before a crash is on disk.
+// Each start moves the log of the run before to <app>-trace-prev.log; a run that didn't end with "session ended"
+// closed unexpectedly (a crash, or Scriptable swiped away). Settings › Diagnostics: on/off, copy, show, clear.
+const TRACE_PATH = FileManager.local().joinPath(FileManager.local().documentsDirectory(), APP_ID + "-trace.log");
+const TRACE_PREV = FileManager.local().joinPath(FileManager.local().documentsDirectory(), APP_ID + "-trace-prev.log");
+let traceActive = false;   // only Vintly's window traces: a widget run must never write over the app's log
+const traceOn = () => { try { return traceActive && settings.traceLog !== false; } catch (e) { return false; } };
+let traceLines = [], traceTimer = null, traceT0 = Date.now(), lastRun = null;
+function trace(msg, now) { try { traceLine(msg, now); } catch (e) {} }   // the log never breaks what it watches
+function traceLine(msg, now) {
+  if (!traceOn()) return;
+  const line = `${new Date().toISOString().slice(11, 23)} +${((Date.now() - traceT0) / 1000).toFixed(1)}s  ${String(msg).slice(0, 2000)}`;
+  traceLines.push(line);
+  if (traceLines.length > 2000) traceLines.splice(0, traceLines.length - 1600);
+  if (now) traceFlush();
+  else if (!traceTimer) traceTimer = Timer.schedule(600, false, () => { traceTimer = null; traceFlush(); });
+}
+function traceFlush() { try { FileManager.local().writeString(TRACE_PATH, traceLines.join("\n")); } catch (e) {} }
+const traceErr = (where, e) => trace(`ERROR ${where}: ${(e && e.message) || e}${e && e.stack ? "\n    " + String(e.stack).split("\n").slice(0, 6).join("\n    ") : ""}`, true);
+const kb = n => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
+function traceStart() {
+  const lf = FileManager.local();
+  try {
+    if (lf.fileExists(TRACE_PATH)) {
+      const old = lf.readString(TRACE_PATH);
+      if (/session started/.test(old) && !/session ended/.test(old.slice(-600)))
+        lastRun = { at: (old.match(/^(\d\d:\d\d:\d\d)/m) || [])[1] || "", last: old.split("\n").filter(Boolean).slice(-4).map(l => l.replace(/^\S+ \S+\s+/, "")).join("\n") };
+      lf.writeString(TRACE_PREV, old);
+    }
+  } catch (e) {}
+  traceLines = []; traceT0 = Date.now(); traceActive = true;
+  let dev = "";
+  try { dev = `${Device.model()} · iOS ${Device.systemVersion()} · screen ${Device.screenSize().width}×${Device.screenSize().height}`; } catch (e) {}
+  trace(`session started · Vintly ${VERSION} · ${dev} · ${new Date().toISOString().slice(0, 10)}`, true);
+  if (lastRun) trace("the run before didn't close normally; its log is under \"the run before\"", true);
+}
+function traceText() {
+  const lf = FileManager.local(), rd = p => { try { return lf.fileExists(p) ? lf.readString(p) : ""; } catch (e) { return ""; } };
+  traceFlush();
+  const head = [`Vintly ${VERSION} trace, copied ${new Date().toISOString()}`,
+    `AI: ${PROVIDERS[settings.aiProvider] || "?"} · clean: ${settings.cleanStyle || "?"} · prepared at once: ${cfg("prepAtOnce")} · photo size: ${cfg("photoMax")} px · AI photos: ${cfg("aiPhotoPx")} px`,
+    `items: ${items.length} · photos: ${items.reduce((a, x) => a + x.photos.length, 0)} · batch: ${batch ? batch.photos.length + " photos" : "none"}`].join("\n");
+  return `${head}\n\n===== this run =====\n${rd(TRACE_PATH) || "(empty)"}\n\n===== the run before${lastRun ? " (didn't close normally)" : ""} =====\n${rd(TRACE_PREV) || "(none)"}`;
+}
+
 const loadIssues = [];    // files that didn't arrive (iCloud too slow, or unreadable): never written this run
 const loadRepaired = [];  // files that arrived damaged: kept aside as <name>.broken-<time>.json, then started fresh
 async function load(n, def, waitMs = 10000) {
@@ -308,6 +356,7 @@ const settings = Object.assign(
     cleanStyle: "keep", removePhotosAfter: false, stickers: "all", qrBadge: true,   // stickers: all, kids (kids' items only), off                      // Photos: keep (the item's own pixels), studio (AI re-drawn), off
     ai: true, aiClean: true, aiSpecs: true,                                            // What AI does: sort new photos into items, clean photos
     autoPrepare: true,                                                  // new items from a batch are prepared one by one, right away
+    traceLog: true,                                                     // the detailed log (Settings › Diagnostics), to find a crash
     imageModel: "",                                                     // the OpenAI image model for cleaning ("" = IMAGE_MODEL)
     aiProvider: "anthropic",                                            // AI configuration
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
@@ -452,6 +501,12 @@ async function fetchModels(p) {
 // opts.search: let the model search the web (the provider's own web search tool) up to that many times. Then the
 // answer's sources are in aiCall.sources and the number of searches is counted with the tokens.
 async function aiCall(system, user, maxTokens = 2500, feature = "other", provider = settings.aiProvider, images = [], opts = {}) {
+  const t0 = Date.now();
+  trace(`AI ${feature} → ${provider}${opts.search ? " + web search" : ""}, ${images.length} photo${images.length === 1 ? "" : "s"} ${kb(images.reduce((a, d) => a + d.length, 0))}`, true);
+  try { const txt = await aiCallRun(system, user, maxTokens, feature, provider, images, opts); trace(`AI ${feature} ← ${Date.now() - t0} ms, ${txt.length} chars${aiCall.stop ? ", stop " + aiCall.stop : ""}`); return txt; }
+  catch (e) { trace(`AI ${feature} FAILED after ${Date.now() - t0} ms: ${e.message || e}`, true); throw e; }
+}
+async function aiCallRun(system, user, maxTokens, feature, provider, images, opts) {
   const key = keyFor(provider);
   if (!key) throw new Error(`No ${PROVIDERS[provider]} key saved`);
   aiCall.sources = [];
@@ -599,6 +654,12 @@ function repairJSON(s) {   // outside strings: comments out, keys quoted, 'strin
 // Photo cleanup: one image edit with OpenAI's image model (Claude has no image output). It answers with a PNG
 // (base64) for the JPEG it's given. Tokens are counted like every other request, under the "cleanup" feature (see docs/BLUEPRINTS.md).
 async function aiImageEdit(jpgB64, prompt, size, quality, feature = "cleanup") {
+  const t0 = Date.now();
+  trace(`AI image ${feature} → ${size} ${quality}, photo ${kb(jpgB64.length)}`, true);
+  try { const r = await aiImageEditRun(jpgB64, prompt, size, quality, feature); trace(`AI image ${feature} ← ${Date.now() - t0} ms, ${kb(String(r || "").length)}`); return r; }
+  catch (e) { trace(`AI image ${feature} FAILED after ${Date.now() - t0} ms: ${e.message || e}`, true); throw e; }
+}
+async function aiImageEditRun(jpgB64, prompt, size, quality, feature) {
   const key = keyFor("openai");
   if (!key) throw new Error("Cleaning photos needs an OpenAI key (Settings › AI settings)");
   const model = imageModel();
@@ -749,6 +810,12 @@ function vjs(body, ms = cfg("vintedTimeout") * 1000) {
   return run;
 }
 async function vjsOne(body, ms) {
+  const what = String(body).replace(/\s+/g, " ").replace(/"[A-Za-z0-9+/=]{200,}"/g, '"…"').slice(0, 90), t0 = Date.now();
+  trace(`Vinted → ${what} (${kb(String(body).length)})`, String(body).length > 200000);
+  try { const r = await vjsOneRun(body, ms); trace(`Vinted ← ${Date.now() - t0} ms`); return r; }
+  catch (e) { trace(`Vinted FAILED after ${Date.now() - t0} ms: ${e.message || e}`, true); throw e; }
+}
+async function vjsOneRun(body, ms) {
   const w = await vintedPage();
   const js = "(" + vHelpers.toString() + ")();\n(async () => {\n" + body + "\n})().then(r => completion(JSON.stringify({ ok: true, r: r === undefined ? null : r })), e => completion(JSON.stringify({ ok: false, e: String(e && e.message || e) })));\n'pending';";   // last value must be plain: WebKit can't hand a Promise back
   const out = await Promise.race([w.evaluateJavaScript(js, true), pause(ms).then(() => { throw new Error("Vinted didn't answer in " + Math.round(ms / 1000) + " s"); })]);
@@ -1572,6 +1639,7 @@ function stepper(id, kind = "prepare") {   // kind: prepare, post, draft, fix, f
   const step = (t, p, ph, phase) => {
     const last = b.steps[b.steps.length - 1]; if (last) last.done = true;
     b.steps.push({ t, done: false });
+    trace(`${kind} ${id}: ${t}${ph ? " [" + [].concat(ph).length + " photo]" : ""}`);
     if (p != null) b.p = Math.max(b.p, lo + (hi - lo) * p); else { k++; b.p = Math.max(b.p, lo + (hi - lo) * (1 - Math.pow(0.55, k))); }
     if (ph !== undefined) { b.ph = [].concat(ph || []); b.phase = phase || ""; }
     call("onBusy", id, b);
@@ -1985,6 +2053,7 @@ function clientState() {
   return {
     items: items.map(itemView),
     prep: prepView(),
+    lastRun: lastRun && !lastRunSeen ? lastRun : null,
     batch: batch ? { photos: batch.photos.map(p => ({ id: p.id, t: thumbURL(BATCH, p.id, "t") })), groups: batch.groups, names: batch.names, sorting: !!batch.sorting, by: batch.by || "" } : null,
     colors: vCacheGet().colors || [], conditions: CONDITIONS,
     vinted: { ok: !!settings.vintedOk, at: settings.vintedAt || 0, site: siteOf(), cur: currencyOf(), base: vBase() },
@@ -2002,7 +2071,7 @@ function clientState() {
     settings: {
       tab: settings.tab, vintedSite: siteOf(), lang: settings.lang, lang2: settings.lang2, humour: settings.humour !== false, bothTitles: settings.bothTitles !== false,
       cleanStyle: settings.cleanStyle || "keep", removePhotosAfter: !!settings.removePhotosAfter, stickers: settings.stickers || "all", qrBadge: settings.qrBadge !== false,
-      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiSpecs: settings.aiSpecs !== false, autoPrepare: settings.autoPrepare !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
+      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiSpecs: settings.aiSpecs !== false, autoPrepare: settings.autoPrepare !== false, traceLog: settings.traceLog !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
       checkUpdates: settings.checkUpdates !== false, shareUsage: !!settings.shareUsage,
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
@@ -2018,7 +2087,15 @@ const safeJSON = x => JSON.stringify(x === undefined ? null : x).replace(/\u2028
 let wv = null;
 const call = (fn, ...args) => wv ? wv.evaluateJavaScript(`window.${fn} && window.${fn}(${args.map(safeJSON).join(",")});\n'ok'`, false).catch(() => {}) : Promise.resolve();
 const toast = msg => call("toast", msg);
-const push = () => call("recv", clientState());
+let pushN = 0, pushAt = 0;
+const push = () => {
+  const st = clientState();
+  if (traceOn()) {   // how much goes to the page: the whole state (with thumbnails) on every change
+    pushN++;
+    if (Date.now() - pushAt > 5000) { pushAt = Date.now(); let n = 0; try { n = JSON.stringify(st).length; } catch (e) {} trace(`state to page #${pushN}: ${kb(n)}${n > 4194304 ? " (LARGE)" : ""}`); }
+  }
+  return call("recv", st);
+};
 // Asks the page for something that takes a while (a photo resized or cut out on its canvas); JSON back, with a time limit.
 // One at a time, like vjs(): the page answers through a single completion() callback.
 let evcChain = Promise.resolve();
@@ -2029,12 +2106,18 @@ function evc(expr, ms = 30000) {
 }
 async function evcOne(expr, ms) {
   if (!wv) throw new Error("Vintly's window is closed");
+  const name = (String(expr).match(/window\.(__\w+)/) || [])[1] || String(expr).slice(0, 30), t0 = Date.now();
+  if (traceOn()) trace(`page job ${name} → ${kb(String(expr).length)}`, true);   // on disk before the page starts: a crash in it leaves this as the last line
+  try { const r = await evcOneRun(expr, ms); trace(`page job ${name} ← ${Date.now() - t0} ms${r && r.error ? " ERROR " + r.error : ""}`); return r; }
+  catch (e) { trace(`page job ${name} FAILED after ${Date.now() - t0} ms: ${e.message || e}`, true); throw e; }
+}
+async function evcOneRun(expr, ms) {
   const js = `Promise.resolve(${expr}).then(r => completion(JSON.stringify(r)), e => completion(JSON.stringify({ error: String(e && e.message || e) })));\n'pending'`;   // last value must be plain: WebKit can't hand a Promise back
   const out = await Promise.race([wv.evaluateJavaScript(js, true), pause(ms).then(() => { throw new Error("the page didn't answer in " + ms / 1000 + " s"); })]);
   try { return JSON.parse(out || "null"); } catch (e) { return null; }
 }
 
-const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "aiSpecs", "autoPrepare", "imageModel",
+const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "aiSpecs", "autoPrepare", "traceLog", "imageModel",
   "theme", "density", "font", "textSize", "checkUpdates"];
 async function handle(m) {
   const it = m.id ? byId(m.id) : null;
@@ -2067,13 +2150,18 @@ async function handle(m) {
       settings[m.k] = m.v;
       write("settings", settings);
       if (m.k === "vintedSite") { settings.vintedOk = false; vwv = null; vCache = null; push(); await vintedCheck(); return push(); }
-      if (["ai", "aiClean", "aiSpecs", "autoPrepare", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
+      if (["ai", "aiClean", "aiSpecs", "autoPrepare", "traceLog", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
       return;
     case "cfg": {
       if (m.k === "*") settings.cfg = {}; else setCfg(m.k, m.v);
       if (m.k === "*" || m.k === "keepPostedDays") prune();
       saveAll(); return push();
     }
+    case "trace": trace("page: " + clip(String(m.m || ""), 1500), true); return;
+    case "tracecopy": { const txt = traceText(); Pasteboard.copy(txt); return call("__done", m.req, true, String(txt.split("\n").length)); }
+    case "traceshow": traceFlush(); return call("__done", m.req, true, traceLines.slice(-80).join("\n"));
+    case "traceclear": traceLines = []; traceFlush(); try { FileManager.local().remove(TRACE_PREV); } catch (e) {} lastRun = null; trace("log cleared", true); return push();
+    case "lastrunseen": lastRunSeen = true; return push();
     case "startlog": {
       let txt = "";
       try { txt = FileManager.local().readString(LOG_PATH).split("\n").slice(-40).join("\n"); } catch (e) {}
@@ -2315,7 +2403,8 @@ function buildWebView() {
     if (u.startsWith(SCHEME)) {
       let m = {};
       try { m = JSON.parse(decodeURIComponent(u.split("?d=")[1] || "%7B%7D")); } catch (e) {}
-      handle(m).catch(e => toast(String(e.message || e)));
+      if (m.type !== "trace") trace(`msg ${m.type}${m.id ? " " + m.id : ""}${m.k ? " " + m.k : ""}${m.n != null ? " n=" + m.n : ""}`);
+      handle(m).catch(e => { traceErr("handling " + m.type, e); toast(String(e.message || e)); });
       return false;
     }
     if (/^https?:/i.test(u)) { Safari.openInApp(u, false); return false; }
@@ -2377,6 +2466,11 @@ function clientApp() {
     q.push(m); if (!flushing) flush();
   }
   window.__done = (req, ok, msg) => { const cb = pending[req]; delete pending[req]; if (cb) cb(ok, msg); };
+  window.__send = send;
+  // The page's own errors, and each time it starts (a second start means WebKit reloaded it), go into the detailed log
+  send("trace", { m: `page started (${innerWidth}×${innerHeight}, ${navigator.userAgent.match(/OS [\d_]+/) || ""})` });
+  window.addEventListener("error", e => send("trace", { m: `ERROR in page: ${e.message} at ${(e.filename || "").slice(-30)}:${e.lineno}:${e.colno}${e.error && e.error.stack ? "\n" + String(e.error.stack).split("\n").slice(0, 5).join("\n") : ""}` }));
+  window.addEventListener("unhandledrejection", e => send("trace", { m: `ERROR in page (promise): ${(e.reason && (e.reason.message || e.reason)) || "unknown"}${e.reason && e.reason.stack ? "\n" + String(e.reason.stack).split("\n").slice(0, 5).join("\n") : ""}` }));
   function flush() {
     const m = q.shift();
     if (!m) { flushing = false; return; }
@@ -2573,12 +2667,15 @@ function clientApp() {
   function* barcodeTiles(img) {   // the whole photo, then 2×2 and 3×3 grids of overlapping tiles: a small barcode fills more of a tile
     const W = img.naturalWidth, H = img.naturalHeight;
     for (const n of [1, 2, 3]) {
-      const tw = n === 1 ? W : W / n * 1.5, th = n === 1 ? H : H / n * 1.5, steps = n === 1 ? 1 : 2 * n - 1;
-      for (let i = 0; i < steps; i++) for (let j = 0; j < steps; j++) {
-        const x = steps > 1 ? (W - tw) * i / (steps - 1) : 0, y = steps > 1 ? (H - th) * j / (steps - 1) : 0, k = Math.min(1, 2048 / Math.max(tw, th));
-        const c = canvas(tw * k, th * k); c.getContext("2d").drawImage(img, x, y, tw, th, 0, 0, c.width, c.height);
-        yield c;
-      }
+      const tw = n === 1 ? W : W / n * 1.5, th = n === 1 ? H : H / n * 1.5, steps = n === 1 ? 1 : 2 * n - 1, k = Math.min(1, 1600 / Math.max(tw, th));
+      const c = canvas(tw * k, th * k), x2 = c.getContext("2d");   // one canvas per grid, drawn over for each tile: WebKit's memory stays small
+      try {
+        for (let i = 0; i < steps; i++) for (let j = 0; j < steps; j++) {
+          const x = steps > 1 ? (W - tw) * i / (steps - 1) : 0, y = steps > 1 ? (H - th) * j / (steps - 1) : 0;
+          x2.clearRect(0, 0, c.width, c.height); x2.drawImage(img, x, y, tw, th, 0, 0, c.width, c.height);
+          yield c;
+        }
+      } finally { c.width = c.height = 0; }   // let go of its pixels now, not whenever WebKit gets to it
     }
   }
   window.__barcode = async (b64, box, cropOnly) => {
@@ -2593,9 +2690,13 @@ function clientApp() {
       const k = Math.min(z, 2400 / Math.max(cw, ch)), c = canvas(cw * k, ch * k), x = c.getContext("2d");
       x.imageSmoothingQuality = "high"; x.filter = z > 1 ? "contrast(1.4) grayscale(1)" : "none"; x.drawImage(img, x0, y0, cw, ch, 0, 0, c.width, c.height);
       if (z === 2) big = c;
-      if (!cropOnly) { const code = readCode(c); if (code) return { code }; }
+      const code = cropOnly ? "" : readCode(c);
+      if (z !== 2) c.width = c.height = 0;
+      if (code) { if (big) big.width = big.height = 0; return { code }; }
     }
-    return { code: "", crop: b64of(shrink(big, 1400), "image/jpeg", 0.92) };   // for ✦ AI to read the digits
+    const small = shrink(big, 1400), crop = b64of(small, "image/jpeg", 0.92);
+    big.width = big.height = 0; small.width = small.height = 0;
+    return { code: "", crop };   // for ✦ AI to read the digits
   };
   window.__scale = async (b64, max) => ({ b64: b64of(shrink(await loadImg("data:image/jpeg;base64," + b64), max), "image/jpeg", 0.85) });
   // The photo on the image model's canvas (its sizes are fixed), with grey bars, so the drawing lines up with the photo.
@@ -2990,13 +3091,15 @@ function clientApp() {
     const add = `<div class="addbar"><button class="primary" data-act="cam"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Take photos</button>
       <button class="sm big2" data-act="lib"><svg class="ico" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 16l5-5 4 4 3-3 4 4"/></svg>Choose photos</button></div>`;
     const signin = S.vinted.ok ? "" : `<div class="banner"><b>Sign in to Vinted</b><span>Vintly posts with your own ${esc(S.vinted.site)} account. Sign in once, inside Vintly.</span><button class="sm primary" data-act="vsignin">Sign in</button></div>`;
+    const lr = S.lastRun ? `<div class="lastrun" role="status"><b>⚠️ Vintly didn't close normally last time</b><small>It may have crashed${S.lastRun.at ? " (started " + esc(S.lastRun.at) + " UTC)" : ""}, or Scriptable was closed from the app switcher. Its last steps:</small><pre>${esc(S.lastRun.last)}</pre>
+      <div class="lr-btns"><button class="sm primary" data-act="lastrun-copy">Copy the log</button><button class="sm" data-act="lastrun-x">Dismiss</button></div></div>` : "";   // on every To post view, empty or not
     if (!list.length) {
-      main.innerHTML = `${signin}<div class="empty"><svg class="empty-mark" viewBox="0 0 240 240" aria-hidden="true">${window.__LOGO}</svg>
+      main.innerHTML = `${lr}${signin}<div class="empty"><svg class="empty-mark" viewBox="0 0 240 240" aria-hidden="true">${window.__LOGO}</svg>
         <h2>Snap it. List it.</h2><p>Take photos of things you no longer need, a few of each. Vintly sorts them into items, ${S.settings.canClean ? "cleans the photos, " : ""}writes each listing and posts it on Vinted when you say so.</p>${add}
         ${S.settings.hasKey ? "" : `<p class="note">Without an AI key you fill in the listing yourself. Add one in Settings › AI settings.</p>`}</div>`;
       return;
     }
-    main.innerHTML = `${signin}${add}${prepBar(list)}<div class="cards">${list.map(pcard).join("")}</div>`;
+    main.innerHTML = `${lr}${signin}${add}${prepBar(list)}<div class="cards">${list.map(pcard).join("")}</div>`;
   }
   function renderTray() {
     const el = $("#tray");
@@ -3405,6 +3508,12 @@ function clientApp() {
         ? `<div class="srow"><div class="grow"><b>Updates</b><small class="muted">You have Vintly ${esc(S.version)}. New versions come through the App Store (or TestFlight).</small></div></div>`
         : `<div class="srow"><div class="grow"><b>Offer new versions</b><small class="muted">You have Vintly ${esc(S.version)}. “Later” waits two days.</small></div><button class="switch ${S.settings.checkUpdates ? "on" : ""}" data-act="toggle" data-v="checkUpdates" aria-label="Offer new versions"></button></div>
       <div class="srow"><div class="grow"><b>Check for updates now</b><small id="updmsg" class="muted" aria-live="polite"></small></div><button class="sm" data-act="updcheck">Check</button></div>`}
+      <h3 class="sec">Diagnostics</h3>
+      <div class="srow"><div class="grow"><b>Detailed log</b><small class="muted">Writes down every step (start-up, photos, AI, Vinted, the page) with times and sizes, on this iPhone only, to find a crash. Turn it off once the problem is found.</small></div>
+        <button class="switch ${S.settings.traceLog ? "on" : ""}" data-act="toggle" data-v="traceLog" aria-label="Detailed log"></button></div>
+      <div class="srow"><div class="grow"><b>Copy the log</b><small id="tracemsg" class="muted" aria-live="polite">This run and the one before, ready to paste into a message</small></div><button class="sm primary" data-act="tracecopy">Copy</button></div>
+      <div class="srow"><div class="grow"><b>The latest steps</b></div><button class="sm" data-act="traceshow">Show</button><button class="sm" data-act="traceclear">Clear</button></div>
+      <pre id="tracelog" class="startlog" hidden></pre>
       <div class="srow"><div class="grow"><b>Start-up log</b><small class="muted">What happened the last times Vintly opened</small></div><button class="sm" data-act="startlog">Show</button></div>
       <pre id="startlog" class="startlog" hidden></pre>
       ${S.cfgSchema.map(sec => `<h3 class="sec">${esc(sec.title)}</h3>${sec.items.map(field).join("")}`).join("")}
@@ -3616,6 +3725,16 @@ function clientApp() {
         if (cfgArmed) { cfgArmed = false; send("cfg", { k: "*" }); }
         else { cfgArmed = true; renderCfg(); setTimeout(() => { if (cfgArmed) { cfgArmed = false; renderCfg(); } }, 3500); }
         break;
+      case "tracecopy": { const msg = $("#tracemsg"); send("tracecopy", {}, (ok, n) => { const t2 = `Copied: ${n} lines. Paste it into a message.`; if (msg) msg.textContent = t2; window.toast(t2); }); break; }
+      case "traceshow": {
+        const pre = $("#tracelog");
+        if (!pre.hidden) { pre.hidden = true; t.textContent = "Show"; break; }
+        send("traceshow", {}, (ok, txt) => { pre.textContent = txt || "Nothing logged yet (is the detailed log on?)."; pre.hidden = false; t.textContent = "Hide"; pre.scrollTop = pre.scrollHeight; });
+        break;
+      }
+      case "traceclear": { send("traceclear", {}); const tp = $("#tracelog"); if (tp) tp.hidden = true; window.toast("Log cleared"); break; }
+      case "lastrun-copy": send("tracecopy", {}, (ok, n) => window.toast(`Copied: ${n} lines. Paste it into a message.`)); send("lastrunseen", {}); break;
+      case "lastrun-x": send("lastrunseen", {}); break;
       case "startlog": {
         const pre = $("#startlog");
         if (!pre.hidden) { pre.hidden = true; t.textContent = "Show"; break; }
@@ -3790,6 +3909,11 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .pc-iss li.good{background:var(--signal-wash);color:var(--ink)}
 .eb-wait{display:flex;align-items:center;gap:8px}
 .eb-raw{font-size:calc(12.5px * var(--ts));color:var(--ink-2);margin:6px 0}
+.lastrun{display:flex;flex-direction:column;gap:6px;background:var(--amber-wash);border:1px solid rgba(251,191,36,.45);border-radius:14px;padding:11px 13px;margin:0 0 12px}
+.lastrun small{color:var(--ink-2);font-size:calc(12.5px * var(--ts))}
+.lastrun pre{margin:0;font-size:11px;line-height:1.4;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);max-height:90px;overflow:auto}
+.lr-btns{display:flex;gap:8px}
+#tracelog{max-height:320px;overflow:auto}
 .prepsum{display:flex;gap:14px;flex-wrap:wrap;font-size:calc(13px * var(--ts));font-weight:600;margin:0 2px 10px}
 .pb-ok{color:var(--signal)} .pb-bad{color:var(--amber)}
 .empty{text-align:center;padding:30px 12px}
@@ -4234,6 +4358,9 @@ window.__bootNote = function (title, detail) {
   b.querySelector("b").textContent = title;
   b.querySelector("span").textContent = "Close Vintly and open it again. If it keeps happening, run the installer once more.";
   if (detail) b.querySelector("pre").textContent = detail;
+  var c = document.createElement("button"); c.className = "sm"; c.textContent = "Copy the log"; c.style.marginTop = "12px";
+  c.onclick = function () { if (window.__send) window.__send("tracecopy", {}, function () { c.textContent = "Copied"; }); };
+  b.appendChild(c);
 };
 setTimeout(function () { if (!window.__booted) window.__bootNote("Still loading…"); }, 25000);
 document.addEventListener("visibilitychange", function () {   // coming back into view: redraw
@@ -4556,6 +4683,7 @@ const ev = (js, ms = 20000) => Promise.race([wv.evaluateJavaScript(js, false), p
 
 async function bootApp(isClosed) {
   const t0 = Date.now();
+  trace("boot: reading data", true);
   startLog(`Vintly ${VERSION}: reading data`);
   await loadData();
   startLog(`data read in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${items.length} items${loadIssues.length ? "; missing: " + loadIssues.join(", ") : ""}`);
@@ -4596,7 +4724,9 @@ async function bootApp(isClosed) {
   Timer.schedule(6000, false, () => { widgetIcon(); });
 }
 
+let lastRunSeen = false;
 async function main() {
+  traceStart();
   await waitForOtherWindow();
   buildWebView();
   // A page built before its window is on screen can stay blank on some iPhones (the page runs, nothing is drawn),
@@ -4610,16 +4740,27 @@ async function main() {
   let closed = false;
   presented.then(() => { closed = true; releaseLock(); flushUsage(); });
   bootApp(() => closed).catch(e => {         // runs beside the window: closing it never waits on this
+    traceErr("start-up", e);
     startLog("start-up failed: " + (e.message || e));
     let log = "";
     try { log = FileManager.local().readString(LOG_PATH).split("\n").slice(-12).join("\n"); } catch (x) {}
     if (!closed) wv.evaluateJavaScript(`window.__bootNote("Vintly couldn't open", ${safeJSON(log)})`, false).catch(() => {});
+  });
+  // Is the page still alive? WebKit can drop a page that ran out of memory: it then stops answering.
+  let quiet = 0;
+  const beat = Timer.schedule(15000, true, async () => {
+    if (closed || !wv) { beat.invalidate(); return; }
+    if (!traceOn()) return;
+    const t0 = Date.now();
+    try { await Promise.race([wv.evaluateJavaScript("1", false), pause(6000).then(() => { throw new Error("no answer in 6 s"); })]); if (quiet) trace(`page answers again (after ${quiet} missed checks)`); quiet = 0; if (Date.now() - t0 > 2000) trace(`page slow: answered in ${Date.now() - t0} ms`); }
+    catch (e) { quiet++; trace(`PAGE NOT ANSWERING (${quiet}): ${e.message || e}. WebKit may have dropped the page (memory?)`, true); }
   });
   await presented;
   closed = true;
   releaseLock();
   saveAll();                                 // write() skips data that was never read
   if (dataLoaded) saveWidget(widgetSnapshot());
+  trace("session ended: Vintly closed normally", true);
 }
 
 // Settings are loaded at the top of the script (load("settings")), before every branch; data is read in each branch.
@@ -4627,6 +4768,7 @@ if (config.runsInWidget || config.runsInAccessoryWidget) {
   await loadData();
   await runWidget();             // never builds or presents a WebView, Alert or QuickLook
 } else {
-  await main();
+  try { await main(); }
+  catch (e) { traceErr("Vintly stopped", e); throw e; }
 }
 Script.complete();

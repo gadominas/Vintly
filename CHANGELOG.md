@@ -2,6 +2,26 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.10.0 (2026-11-08): A log to catch the crash
+
+- 📝 **Detailed log**: Every step, with times and sizes, saved on your iPhone so the moment before a crash is kept.
+- 📋 **Copy it in one tap**: Settings › Diagnostics › Copy: this run and the one before, ready to paste.
+- ⚠️ **Knows when it crashed**: If Vintly didn't close normally, the next start says so and shows its last steps.
+
+**Changes**
+
+- Settings › Diagnostics › Detailed log (on for now): start-up, every message from the page, every page job (photo scaling, barcode scanning, stickers, cut-outs) with its size and time, AI and Vinted requests, preparing and posting steps, how much state goes to the page, and errors with their stack, in vintly-trace.log on this iPhone (not iCloud)
+- Lines before heavy work are saved at once, so the last line before a crash is on disk; each start keeps the run before as vintly-trace-prev.log
+- A run that didn't end with a normal close is noted on the next start, on the To post list, with its last steps, Copy the log and Dismiss
+- Copy the log (Settings, the note, and the "Vintly couldn't open" screen) puts this run and the one before on the clipboard, with the version, iPhone, iOS and a few settings; Show the latest steps; Clear
+- The page's own errors and each time it starts are written down; every 15 s Vintly checks the page still answers, and notes when it doesn't (WebKit drops a page that runs out of memory)
+- Barcode scanning uses far less of WebKit's memory: one canvas per grid of tiles, reused and let go at once, tiles at most 1600 px (was a new 2048 px canvas for each of about 35 tiles per photo)
+- Tests: tests/cases/06-trace.test.js
+
+**Fixes**
+
+- To post with no items didn't show notes above it
+
 ## 1.9.1 (2026-11-08): Sorting that doesn't trip
 
 
