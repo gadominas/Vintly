@@ -2,6 +2,26 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.8.0 (2026-11-08): Barcodes that read, posts in line
+
+- 🏷️ **Barcodes that read**: A real barcode reader scans the stripes, zooms in where AI saw the code, and checks every digit.
+- ⚡ **Two at a time**: A pile of items is prepared two at once, so the list is ready sooner.
+- 📬 **Posts in line**: Tap Post on several items: they go to Vinted one by one, in the order you tapped.
+
+**Changes**
+
+- Barcodes: ZXing (the open-source barcode reader, version 0.21.3, its SHA-256 checked) is downloaded once and reads the stripes of the original photos in overlapping tiles while ✦ AI reads the photos; when AI points out a barcode it couldn't be read from, a zoomed, sharpened crop of that spot is scanned, and then given to ✦ AI to read the digits; digits AI reads count only when the barcode's check digit is right
+- The item says how its barcode was found (scanned, scanned up close, read by AI); when one is in the photos but can't be read, the card and the item say a sharp close-up helps
+- Photo size kept: 2048 px by default (was 1600), so labels and barcodes stay sharp
+- Titles always start with a capital letter: AI's, typed ones, fixes and titles saved before; each part of a two-language title gets its own; words like iPhone or eBay stay as made
+- Settings › AI › Items prepared at once (2 by default, 1 to 4); the bar shows the items being prepared now
+- Posting goes one item at a time: further Post taps wait in line (Waiting to post · 2), with Don't post to take one out
+- Tests: tests/cases/03-line-titles.test.js
+
+**Fixes**
+
+- A barcode digit misread by AI could look up the wrong product
+
 ## 1.7.0 (2026-11-08): Errors you can read, and fix with one tap
 
 - 🛠️ **Fix with AI**: One tap sends the error to AI, which changes what Vinted didn't accept; then post again.

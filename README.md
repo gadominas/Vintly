@@ -37,7 +37,7 @@ Photograph what you no longer need and Vintly turns the photos into Vinted listi
 - **Technical details, looked up.** ✦ AI finds the exact product on the web (or by its barcode or ISBN in free product databases) and adds its dimensions, weight, materials and specs at the end of the description.
 - **Every Vinted field filled.** Category, size, material and the other fields the category asks for, matched against Vinted's own lists, plus the parcel size.
 - **A fair price.** Starts from Vinted's own price suggestion for the item, or the AI's used price, and goes a set share below it, rounded.
-- **A pile at once.** Photograph several things; each item is prepared in turn while you wait or carry on. Every card shows what's wrong with it (⚠) or that it's ready (✓).
+- **A pile at once.** Photograph several things; they're prepared two at a time while you wait or carry on, and posts go to Vinted one by one. Every card shows what's wrong with it (⚠) or that it's ready (✓).
 - **You post.** Adjust the price with − and + and tap **Post** right on the list (3 seconds to undo), or open the item, change any field and post from there; or save a Vinted draft to finish on the website.
 - **Your Vinted messages.** Every time Vintly opens it loads your conversations; the unread count leads the Messages tab and the widget. Read a conversation and reply without leaving Vintly.
 - **Your listings, with delete.** All your Vinted listings, also those posted from the website, with views, favourites, sold and reserved. Open one on Vinted, or delete it with two taps.
@@ -104,6 +104,7 @@ What else you need:
 | Add items | Tap **Take photos** or **Choose photos**; take a few photos of each thing. Or share photos to Vintly from Photos |
 | Fix the sorting | Tap a photo, then the item it belongs to (or **+ A new item**). **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
 | Get listings for a pile | After **Add … items**, each item is prepared in turn (the bar above the list shows how far; **Stop** ends the line). **✦ Prepare all** prepares items that weren't. Turn it off in Settings › AI settings › Prepare new items right away |
+| Get a barcode read | Take one sharp close-up with the barcode filling most of the photo. Vintly scans the stripes, zooms in where ✦ AI saw it, and only uses digits whose check digit is right |
 | Fix an error | Errors are in plain words, on the card and by the button that failed. Tap **✦ Fix with AI**: AI changes what Vinted didn't accept (or fills what's missing) and lists the changes; then post again. Vinted's own answer is under **Details** |
 | Post from the list | A ready card (✓) has the price with **−** and **+** (or type it) and **Post**; tap **Undo** within 3 seconds to stop it. A card with ⚠ says what's wrong; **Fix ›** opens it |
 | Get a listing | Open an item, add notes if you know something the photos don't show (size, flaws, "never worn"), tap **Prepare**. Vintly cleans the photos, writes the listing, fills Vinted's fields and sets a price |

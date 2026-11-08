@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -120,13 +120,14 @@ const CONFIG = [
     { k: "priceMin", label: "Lowest price", help: "Vintly never suggests less than this", unit: "", def: 2, min: 1, max: 50, step: 1 },
   ]],
   ["Photos", [
-    { k: "photoMax", label: "Photo size kept", help: "Long side of each photo; larger is sharper but slower to upload", unit: "px", def: 1600, min: 800, max: 2400, step: 100 },
+    { k: "photoMax", label: "Photo size kept", help: "Long side of each photo; larger is sharper (and barcodes read better) but slower to upload", unit: "px", def: 2048, min: 800, max: 2400, step: 100 },
     { k: "maskGrow", label: "Soft edge around the item", help: "The cut-out fades out over this width, so no edge of the item is lost", unit: "px", def: 3, min: 0, max: 24, step: 1 },
     { k: "itemMargin", label: "Room around the item", help: "A cleaned photo is centred with this much space around the item", unit: "%", def: 8, min: 0, max: 30, step: 1 },
     { k: "maxPhotos", label: "Photos per item", help: "Vinted takes up to 20", unit: "photos", def: 20, min: 1, max: 20, step: 1 },
   ]],
   ["AI", [
     { k: "aiPhotos", label: "Photos AI looks at", help: "More helps with labels and details but uses more tokens", unit: "photos", def: 4, min: 1, max: 8, step: 1 },
+    { k: "prepAtOnce", label: "Items prepared at once", help: "When several wait in line; more is faster but uses AI and image requests at the same time", unit: "items", def: 2, min: 1, max: 4, step: 1 },
     { k: "aiPhotoPx", label: "Size of photos sent to AI", help: "Larger reads small labels better but uses more tokens", unit: "px", def: 1024, min: 512, max: 1600, step: 128 },
   ]],
   ["Vinted", [
@@ -196,6 +197,44 @@ async function pool(items, n, fn) {
   await Promise.all(Array.from({ length: Math.max(1, Math.min(n, q.length)) }, async () => {
     while (q.length) { const it = q.shift(); try { await fn(it); } catch (e) { console.log(String(e)); } }
   }));
+}
+// Titles start with a capital letter. A word made with a capital inside (iPhone, eBay) stays as its maker writes it;
+// each part of a two-language title ("… / …") gets its own capital.
+function capFirst(s) {
+  s = String(s == null ? "" : s);
+  const m = s.match(/^(\s*["'„“«‘(\[]*)(\p{L})(\p{L}?)/u);
+  if (!m || (m[3] && m[3] !== m[3].toLowerCase())) return s;
+  return m[1] + m[2].toLocaleUpperCase() + s.slice(m[1].length + m[2].length);
+}
+const capTitle = s => String(s == null ? "" : s).split(" / ").map(capFirst).join(" / ");
+// A barcode's own check digit (EAN-8, UPC-A, EAN-13, GTIN-14, ISBN-10): digits AI read wrongly almost never pass it.
+function codeOk(c) {
+  c = String(c || "").toUpperCase();
+  if (/^\d{9}[\dX]$/.test(c)) { let t = 0; for (let i = 0; i < 10; i++) t += (c[i] === "X" ? 10 : +c[i]) * (10 - i); return t % 11 === 0; }
+  if (!/^(\d{8}|\d{12,14})$/.test(c)) return false;
+  const d = c.split("").map(Number), chk = d.pop();
+  const t = d.reverse().reduce((a, n, i) => a + n * (i % 2 ? 1 : 3), 0);
+  return (10 - t % 10) % 10 === chk;
+}
+// SHA-256 of a string's UTF-8 bytes, hex: checks the barcode reader downloaded from the CDN is the very file Vintly expects.
+function sha256(str) {
+  const b = unescape(encodeURIComponent(str)), K = [], H = [1779033703, 3144134277, 1013904242, 2773480762, 1359893119, 2600822924, 528734635, 1541459225];
+  const frac = x => (x - Math.floor(x)) * 4294967296 | 0;
+  for (let n = 2, k = 0; k < 64; n++) { let p = true; for (let i = 2; i * i <= n; i++) if (n % i === 0) { p = false; break; } if (p) K[k++] = frac(Math.cbrt(n)); }
+  const l = b.length, words = new Int32Array(((l + 9 + 63) >> 6) << 4);
+  for (let i = 0; i < l; i++) words[i >> 2] |= b.charCodeAt(i) << (24 - (i & 3) * 8);
+  words[l >> 2] |= 0x80 << (24 - (l & 3) * 8); words[words.length - 1] = l * 8; words[words.length - 2] = Math.floor(l / 536870912);
+  const w = new Int32Array(64), r = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let j = 0; j < words.length; j += 16) {
+    let [a, bb, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      w[i] = i < 16 ? words[j + i] : (r(w[i - 2], 17) ^ r(w[i - 2], 19) ^ (w[i - 2] >>> 10)) + w[i - 7] + (r(w[i - 15], 7) ^ r(w[i - 15], 18) ^ (w[i - 15] >>> 3)) + w[i - 16] | 0;
+      const t1 = h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i] | 0, t2 = (r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & bb) ^ (a & c) ^ (bb & c)) | 0;
+      h = g; g = f; f = e; e = d + t1 | 0; d = c; c = bb; bb = a; a = t1 + t2 | 0;
+    }
+    H[0] = H[0] + a | 0; H[1] = H[1] + bb | 0; H[2] = H[2] + c | 0; H[3] = H[3] + d | 0; H[4] = H[4] + e | 0; H[5] = H[5] + f | 0; H[6] = H[6] + g | 0; H[7] = H[7] + h | 0;
+  }
+  return H.map(x => (x >>> 0).toString(16).padStart(8, "0")).join("");
 }
 // ---------- end pure helpers ----------
 
@@ -284,6 +323,7 @@ async function loadData() {
   loadIssues.length = 0;   // loadRepaired is kept, so a damaged settings.json (read before this) still gets its toast
   items = await load("items", []);
   if (!Array.isArray(items)) items = [];
+  for (const x of items) if (x && x.listing && x.listing.title && x.status !== "posted") x.listing.title = capTitle(x.listing.title);   // titles saved before 1.8.0
   usage = await load("usage", usage);
   dataLoaded = loadIssues.length === 0;   // anything missing: show what we have, save nothing over it
 }
@@ -842,7 +882,7 @@ async function vPost(it, asDraft, onStep) {
   if (L.conditionId) attrs.push({ code: "condition", ids: [+L.conditionId] });
   for (const [code, ids] of Object.entries(L.attrs || {})) if (code !== "condition" && ids && ids.length) attrs.push({ code, ids: ids.map(Number) });
   const item = {
-    id: null, currency: currencyOf(), temp_uuid: sessionId, title: clip(L.title, 100), description: clip(L.description, 3000),
+    id: null, currency: currencyOf(), temp_uuid: sessionId, title: capTitle(clip(L.title, 100)), description: clip(L.description, 3000),
     brand_id: L.brandId || null, brand: L.brandTitle || "", catalog_id: +L.catalogId, isbn: null,
     ai_photo: it.photos.some(p => p.use === "clean" && p.clean && p.studio),   // an AI-drawn studio photo is marked as one
     price: String(L.price), package_size_id: L.packageSizeId ? +L.packageSizeId : null, shipment_prices: { domestic: null },
@@ -1168,7 +1208,9 @@ function listingPrompt(colors) {
  "materials": ["main materials in English, e.g. wood, plastic, cotton"],
  "size": "the size as printed (clothing, shoes), or the age range for children's items, else empty",
  "parcel": "S (fits a large envelope), M (fits a shoe box) or L (bigger)",
- "barcode": "the digits of an EAN/UPC barcode or ISBN you can read in the photos, else empty",
+ "barcode": "the digits printed under an EAN/UPC barcode, or an ISBN, exactly as you read them in the photos, else empty",
+ "barcode_photo": the number (1, 2, …, in the order given) of the photo where a barcode or ISBN is clearest, or 0 if none is visible,
+ "barcode_box": [left, top, right, bottom] around the barcode with its digits in that photo, as fractions of its width and height (0 to 1), or null,
  "printed": "model numbers, product names and specs printed on the item, its label or box (e.g. 'Model X200, 12 V, 2.5 MP'), else empty",
  "price_new": typical new price in ${cur} as a number, or null,
  "price_used": what this item usually sells for second-hand on Vinted in ${cur}, as a number,
@@ -1177,7 +1219,7 @@ function listingPrompt(colors) {
  "description": {${langs}},
  "confidence": a number from 0 to 1
 }
-Titles: at most 60 characters, brand (if any) + what it is + one key detail; no emojis, no capitals-only words.
+Titles: at most 60 characters, starting with a capital letter, brand (if any) + what it is + one key detail; no emojis, no capitals-only words.
 Descriptions: 3 to 5 short sentences: what it is, its notable features, its condition honestly (with any flaws), and that it is sold as shown in the photos${L2 ? `; the ${L2} text says the same as the ${L1} text, naturally written, not word for word` : ""}.` +
       (settings.humour ? ` Add one light, friendly touch of humour (a gentle joke, never at the buyer's expense, never about the price).` : ` Keep the tone plain and friendly.`) +
       ` No hashtags, no emojis, no prices, no contact details, no "DM me".`,
@@ -1188,24 +1230,82 @@ async function analyse(it) {
   for (const ph of it.photos.slice(0, n)) imgs.push(await aiImage(it, ph));
   const colors = (vCacheGet().colors || []).map(c => c.code).filter(Boolean).join(", ") || "BLACK, GREY, WHITE, CREAM, BEIGE, BROWN, RED, PINK, ORANGE, YELLOW, GREEN, BLUE, NAVY, PURPLE, GOLD, SILVER, MULTI";
   const p = listingPrompt(colors);
+  const scan = scanBarcode(it, n).catch(e => { startLog("barcode scan: " + (e.message || e)); return null; });   // the page reads the stripes while AI reads the photos
   const txt = await aiCall(p.system, p.user + (it.notes ? `\n\nThe seller adds: ${clip(it.notes, 600)}` : "") + (it.hint ? `\nIt was sorted as: ${it.hint}` : ""), 2500, "listing", settings.aiProvider, imgs);
   const j = parseJSON(txt);
   it.ai = { at: Date.now(), by: PROVIDERS[settings.aiProvider], what: clip(j.what, 80), brand: clip(j.brand, 60), model: clip(j.model, 60),
     words: (j.category_words || []).map(w => clip(w, 60)).slice(0, 6), condition: CONDITIONS.some(c => c.code === j.condition) ? j.condition : "good",
     flaws: (j.flaws || []).map(f => clip(f, 120)).slice(0, 6), colors: (j.colors || []).slice(0, 2).map(String), materials: (j.materials || []).slice(0, 4).map(String),
-    size: clip(j.size, 40), barcode: String(j.barcode || "").replace(/[^0-9X]/gi, "").slice(0, 14), printed: clip(j.printed, 300), parcel: ["S", "M", "L"].includes(j.parcel) ? j.parcel : "M",
+    size: clip(j.size, 40), barcode: "", printed: clip(j.printed, 300), parcel: ["S", "M", "L"].includes(j.parcel) ? j.parcel : "M",
     priceNew: +j.price_new > 0 ? +j.price_new : null, priceUsed: +j.price_used > 0 ? +j.price_used : null, priceWhy: clip(j.price_why, 200),
     confidence: Math.max(0, Math.min(1, +j.confidence || 0)) };
+  await settleBarcode(it, await scan, j, n);
   const L = it.listing = it.listing || {};
   const t = j.title || {}, d = j.description || {}, l2 = settings.lang2 && settings.lang2 !== settings.lang ? settings.lang2 : "";
   const t1 = clip(t[settings.lang] || Object.values(t)[0] || it.ai.what, 70), t2 = l2 ? clip(t[l2], 70) : "";
-  if (!L.titleSet) L.title = clip(settings.bothTitles && t2 && norm(t2) !== norm(t1) ? `${t1} / ${t2}` : t1, 100);
+  if (!L.titleSet) L.title = capTitle(clip(settings.bothTitles && t2 && norm(t2) !== norm(t1) ? `${t1} / ${t2}` : t1, 100));
   const d1 = String(d[settings.lang] || Object.values(d)[0] || "").trim(), d2 = l2 ? String(d[l2] || "").trim() : "";
   if (!L.descSet) L.description = clip(d2 ? `${d1}\n\n${d2}` : d1, 3000);
   if (!L.condSet) L.conditionId = CONDITIONS.find(c => c.code === it.ai.condition).id;
   L.aiText = { by: it.ai.by, at: it.ai.at };
   if (it.ai.priceUsed && !L.priceSet) L.price = fairPrice(it.ai.priceUsed, cfg("priceBelowPct"), cfg("priceRound"), cfg("priceMin"));
 }
+// ---------- barcodes ----------
+// The bars are read by ZXing (the open-source barcode reader, pinned by version and SHA-256), downloaded once into
+// this iPhone's Documents and run in Vintly's page: on the original photos (never the cleaned ones) in overlapping
+// tiles, then on a zoomed crop where ✦ AI saw the barcode. Digits AI reads itself count only when their check digit
+// is right, so a misread number never looks up the wrong product.
+const ZX = { url: "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js", sha: "d7cc8f69dd70bdcf3ac00c9ae572bf2acb9f4132ba379c72df842e4db918652d", file: "vintly-zxing-0.21.3.js" };
+let zxReady = null;
+function barcodeReader() {
+  if (!zxReady) zxReady = (async () => {
+    if ((await evc("!!window.ZXing", 5000)) === true) return true;
+    const lf = FileManager.local(), path = lf.joinPath(lf.documentsDirectory(), ZX.file);
+    let js = lf.fileExists(path) ? lf.readString(path) : "";
+    if (!js) {
+      const r = new Request(ZX.url); r.timeoutInterval = 30;
+      js = await r.loadString();
+      if (sha256(js) !== ZX.sha) throw new Error("the barcode reader that came down isn't the expected file");
+      lf.writeString(path, js);
+    }
+    await ev(js + "\n;'ok'", 30000);
+    return (await evc("!!window.ZXing", 5000)) === true;
+  })().catch(e => { zxReady = null; startLog("barcode reader: " + (e.message || e)); return false; });
+  return zxReady;
+}
+const origPhoto = (it, ph) => readB64(photoFile(it.id, ph.id, ""));
+async function scanBarcode(it, n) {
+  if (!(await barcodeReader())) return null;
+  for (const ph of it.photos.slice(0, n)) {
+    const r = await evc(`window.__barcode(${safeJSON(await origPhoto(it, ph))})`, 45000);
+    if (r && r.code) return { code: r.code, via: "scan", photo: ph.id };
+  }
+  return null;
+}
+async function settleBarcode(it, scanned, j, n) {
+  const A = it.ai, read = String(j.barcode || "").replace(/[^0-9X]/gi, "").toUpperCase().slice(0, 14);
+  const k = +j.barcode_photo, box = Array.isArray(j.barcode_box) && j.barcode_box.length === 4 ? j.barcode_box.map(Number) : null;
+  A.barcode = ""; A.barcodeVia = ""; A.barcodeSeen = !!(read || (k > 0 && k <= n));
+  if (scanned) { A.barcode = scanned.code; A.barcodeVia = "scan"; return; }
+  const ph = k > 0 && it.photos[k - 1];
+  if (ph && box && box.every(v => v >= 0 && v <= 1) && box[2] > box[0] && box[3] > box[1]) {
+    try {
+      const seen = await readB64(photoFile(it.id, ph.id, ph.use === "clean" && ph.clean ? "clean" : ""));   // the very photo AI saw, so its box fits
+      const ok = await barcodeReader(), r = await evc(`window.__barcode(${safeJSON(seen)}, ${safeJSON(box)}, ${ok ? "false" : "true"})`, 45000);
+      if (r && r.code) { A.barcode = r.code; A.barcodeVia = "zoom"; return; }
+      if (r && r.crop) {   // ✦ AI reads the digits off the close-up; kept only if the check digit is right
+        const t = parseJSON(await aiCall("You read the number printed under a barcode, or an ISBN. Reply with JSON only.",
+          `This is a close-up of a barcode on an item. Read every digit printed under or above the bars, left to right, exactly. Reply {"digits":"…"}, or {"digits":""} if you can't read all of them.`,
+          200, "listing", settings.aiProvider, [r.crop]));
+        const d = String(t.digits || "").replace(/[^0-9X]/gi, "").toUpperCase();
+        if (codeOk(d)) { A.barcode = d; A.barcodeVia = "ai-zoom"; return; }
+      }
+    } catch (e) { startLog("barcode zoom: " + (e.message || e)); }
+  }
+  if (codeOk(read)) { A.barcode = read; A.barcodeVia = "ai"; }
+  else if (read) startLog(`barcode: AI read ${read}, its check digit is wrong; not used`);
+}
+
 // ---------- technical details: dimensions, weight, materials, specs ----------
 // Free product databases first (no key, no cost): Open Library for an ISBN, UPCitemdb's free tier for an EAN/UPC.
 // Then ✦ AI with the provider's web search looks the product up (maker's pages and big shops) and returns the
@@ -1527,7 +1627,7 @@ async function explainErr(it) {
 async function applyFix(it, c, step) {
   const L = it.listing = it.listing || {}, O = it.opts = it.opts || {}, out = [];
   let catChanged = false;
-  if (typeof c.title === "string" && c.title.trim().length >= 5 && c.title.trim() !== L.title) { L.title = clip(c.title.trim(), 100); L.titleSet = true; out.push("Title"); }
+  if (typeof c.title === "string" && c.title.trim().length >= 5 && capTitle(c.title.trim()) !== L.title) { L.title = capTitle(clip(c.title.trim(), 100)); L.titleSet = true; out.push("Title"); }
   if (typeof c.description === "string" && c.description.trim().length >= 5 && c.description.trim() !== L.description) { L.description = clip(c.description.trim(), 3000); L.descSet = true; out.push("Description"); }
   const pr = Number(String(c.price == null ? "" : c.price).replace(",", "."));
   if (pr > 0 && pr !== L.price) { L.price = Number(pr.toFixed(2)); L.priceSet = true; out.push(`Price → ${L.price} ${currencyOf()}`); }
@@ -1625,14 +1725,15 @@ async function aiFix(id) {
 // ---------- preparing a batch, one item at a time ----------
 // Items wait in line (it.queued, saved, so a line cut short by closing Vintly carries on next time) and are prepared
 // one after another: one AI and image job at a time keeps within rate limits and shows a steady bar on each card.
-let prepQueue = [], prepRunning = false, prepCur = "", prepRun = null;   // prepRun: { ids, done } for the bar and the summary
-function prepView() { return { queue: prepQueue.slice(), running: prepRunning, cur: prepCur, total: prepRun ? prepRun.ids.length : 0, done: prepRun ? prepRun.done : 0 }; }
+let prepQueue = [], prepWorkers = 0, prepRun = null, prepT0 = 0;   // prepRun: { ids, done } for the bar and the summary
+const prepCurs = new Set();   // the items being prepared right now (Settings › AI › Items prepared at once)
+function prepView() { return { queue: prepQueue.slice(), running: prepWorkers > 0, curs: [...prepCurs], total: prepRun ? prepRun.ids.length : 0, done: prepRun ? prepRun.done : 0 }; }
 function queuePrepare(ids) {
   if (!aiKey()) { toast("Add a Claude or OpenAI key in Settings › AI settings"); return; }
   let n = 0;
   for (const id of ids) {
     const it = byId(id);
-    if (!it || it.status === "posted" || busy[id] || prepQueue.includes(id) || prepCur === id) continue;
+    if (!it || it.status === "posted" || busy[id] || prepQueue.includes(id) || prepCurs.has(id)) continue;
     it.queued = true; prepQueue.push(id); n++;
     if (!prepRun) prepRun = { ids: [], done: 0 };
     prepRun.ids.push(id);
@@ -1645,28 +1746,29 @@ function unqueue(id) {
   const it = byId(id);
   if (it) it.queued = false;
   prepQueue = prepQueue.filter(x => x !== id);
-  if (prepRun && prepRun.ids.includes(id) && prepCur !== id) { prepRun.ids = prepRun.ids.filter(x => x !== id); }
+  if (prepRun && prepRun.ids.includes(id) && !prepCurs.has(id)) { prepRun.ids = prepRun.ids.filter(x => x !== id); }
 }
 function stopPrepQueue() {
   for (const id of prepQueue.slice()) unqueue(id);
   write("items", items); push();
 }
-async function runPrepQueue() {
-  if (prepRunning) return;
-  prepRunning = true;
-  const t0 = Date.now();
+function runPrepQueue() {
+  if (!prepWorkers) prepT0 = Date.now();
+  while (prepWorkers < cfg("prepAtOnce") && prepQueue.length) { prepWorkers++; prepWorker(); }
+}
+async function prepWorker() {
   while (prepQueue.length) {
     const id = prepQueue.shift(), it = byId(id);
     if (!it || !it.queued) { if (prepRun) prepRun.done++; continue; }
-    it.queued = false; prepCur = id;
+    it.queued = false; prepCurs.add(id);
     write("items", items); push();
     try { await prepare(id); } catch (e) { startLog("queue: " + (e.message || e)); }
-    prepCur = "";
+    prepCurs.delete(id);
     if (prepRun) prepRun.done++;
     push();
   }
-  prepRunning = false;
-  const run = prepRun; prepRun = null;
+  if (--prepWorkers > 0) return;   // the last one out tells how it went
+  const run = prepRun, t0 = prepT0; prepRun = null;
   push();
   if (run && run.ids.length > 1) {
     const done = run.ids.map(byId).filter(Boolean), ok = done.filter(x => !x.err && !missingFor(x).length).length, look = done.length - ok;
@@ -1674,6 +1776,27 @@ async function runPrepQueue() {
     track("batch_prepared", { items: done.length, ready: ok, look, seconds: Math.round((Date.now() - t0) / 1000) });
   }
 }
+
+// ---------- posting: one item at a time ----------
+// Post taps line up and go to Vinted one after another, in the order tapped; preparing goes on meanwhile.
+let postLine = [], postRunning = false;   // [{ id, asDraft }]; the first is the one being posted
+function queuePost(id, asDraft) {
+  if (postLine.some(x => x.id === id) || busy[id]) return;
+  postLine.push({ id, asDraft });
+  if (postLine.length > 1) push();
+  runPostLine();
+}
+async function runPostLine() {
+  if (postRunning) return;
+  postRunning = true;
+  while (postLine.length) {
+    const { id, asDraft } = postLine[0];
+    try { await postItem(id, asDraft); } catch (e) { startLog("post line: " + (e.message || e)); }
+    postLine.shift(); push();
+  }
+  postRunning = false;
+}
+const postWaitOf = id => { const i = postLine.findIndex(x => x.id === id); return i > 0 || (i === 0 && !busy[id]) ? i + 1 : 0; };   // its place in line, 0 when not waiting
 
 // ---------- in-app updates (app-blueprints · in-app-updates) ----------
 // Compares "1.10.0" and "1.9.2" as numbers: returns 1, 0 or -1.
@@ -1762,7 +1885,7 @@ function itemView(it) {
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
       t: posted && p !== it.photos[0] ? "" : p.gone ? "" : thumbURL(it.id, p.id, "t"), ct: !p.gone && p.clean && !posted ? thumbURL(it.id, p.id, "ct") : "" })),
-    missing: missingFor(it), busy: busy[it.id] || null, queued: !!it.queued,
+    missing: missingFor(it), busy: busy[it.id] || null, queued: !!it.queued, postWait: postWaitOf(it.id),
   };
 }
 // Your Vinted account for the page: listings, conversations, the open conversation and what's loading.
@@ -2000,7 +2123,7 @@ async function handle(m) {
     case "field": {
       if (!it) return;
       const L = it.listing = it.listing || {}, k = String(m.k || ""), v = m.v;
-      if (k === "title") { L.title = clip(v, 100); L.titleSet = true; }
+      if (k === "title") { L.title = capTitle(clip(v, 100)); L.titleSet = true; }
       else if (k === "description") { L.description = clip(v, 3000); L.descSet = true; }
       else if (k === "price") { const n = Number(String(v).replace(",", ".").replace(/[^0-9.]/g, "")); L.price = n > 0 ? Number(n.toFixed(2)) : null; L.priceSet = true; }
       else if (k === "conditionId") { L.conditionId = +v || null; L.condSet = true; }
@@ -2048,7 +2171,8 @@ async function handle(m) {
       catch (e) { setErr(it, e, "fill"); }
       delete busy[it.id]; write("items", items); return push();
     }
-    case "post": return postItem(m.id, !!m.draft);
+    case "post": return queuePost(m.id, !!m.draft);
+    case "postcancel": if (postWaitOf(m.id)) { postLine = postLine.filter(x => x.id !== m.id); push(); toast("Taken out of the line"); } return;
     case "aifix": return aiFix(m.id);
     case "catsearch": {
       let res = [];
@@ -2178,7 +2302,7 @@ function clientApp() {
       setTimeout(function () { if (!document.getElementById("aiinv")) showInvite(c); }, 600);
     })();
   };
-  window.canInvite = () => !importing && !tray && !Object.values(S.items).some(x => x.busy || x.queued) && !Object.keys(posting).length;   // not while photos come in or an item is being prepared
+  window.canInvite = () => !importing && !tray && !Object.values(S.items).some(x => x.busy || x.queued || x.postWait) && !Object.keys(posting).length;   // not while photos come in or an item is being prepared
   function escI(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); }
   function showInvite(c) {
     var el = document.createElement("div");
@@ -2342,6 +2466,42 @@ function clientApp() {
     if (source === "camera" && !importTarget) { tray += n; importing = 0; renderTray(); return; }   // more photos may follow
     send("import", { n, target: importTarget, source });
   }
+  // ---- barcodes: ZXing over the photo in overlapping tiles, or over a zoomed crop (box: fractions [l, t, r, b]) ----
+  function readCode(c) {
+    const Z = window.ZXing; if (!Z) return "";
+    const h = new Map();
+    h.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E]);
+    h.set(Z.DecodeHintType.TRY_HARDER, true);
+    const r = new Z.MultiFormatReader(); r.setHints(h);
+    try { return r.decode(new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(c)))).getText(); } catch (e) { return ""; }
+  }
+  function* barcodeTiles(img) {   // the whole photo, then 2×2 and 3×3 grids of overlapping tiles: a small barcode fills more of a tile
+    const W = img.naturalWidth, H = img.naturalHeight;
+    for (const n of [1, 2, 3]) {
+      const tw = n === 1 ? W : W / n * 1.5, th = n === 1 ? H : H / n * 1.5, steps = n === 1 ? 1 : 2 * n - 1;
+      for (let i = 0; i < steps; i++) for (let j = 0; j < steps; j++) {
+        const x = steps > 1 ? (W - tw) * i / (steps - 1) : 0, y = steps > 1 ? (H - th) * j / (steps - 1) : 0, k = Math.min(1, 2048 / Math.max(tw, th));
+        const c = canvas(tw * k, th * k); c.getContext("2d").drawImage(img, x, y, tw, th, 0, 0, c.width, c.height);
+        yield c;
+      }
+    }
+  }
+  window.__barcode = async (b64, box, cropOnly) => {
+    const img = await loadImg("data:image/jpeg;base64," + b64);
+    if (!box) { for (const c of barcodeTiles(img)) { const code = readCode(c); if (code) return { code }; } return { code: "" }; }
+    const W = img.naturalWidth, H = img.naturalHeight, pw = (box[2] - box[0]) * 0.2, ph = (box[3] - box[1]) * 0.35;   // a margin: AI's box is rough
+    const x0 = Math.max(0, box[0] - pw) * W, y0 = Math.max(0, box[1] - ph) * H, x1 = Math.min(1, box[2] + pw) * W, y1 = Math.min(1, box[3] + ph) * H;
+    const cw = x1 - x0, ch = y1 - y0;
+    if (cw < 8 || ch < 8) return { code: "" };
+    let big = null;
+    for (const z of [1, 2, 3]) {   // the crop at its own size, then enlarged
+      const k = Math.min(z, 2400 / Math.max(cw, ch)), c = canvas(cw * k, ch * k), x = c.getContext("2d");
+      x.imageSmoothingQuality = "high"; x.filter = z > 1 ? "contrast(1.4) grayscale(1)" : "none"; x.drawImage(img, x0, y0, cw, ch, 0, 0, c.width, c.height);
+      if (z === 2) big = c;
+      if (!cropOnly) { const code = readCode(c); if (code) return { code }; }
+    }
+    return { code: "", crop: b64of(shrink(big, 1400), "image/jpeg", 0.92) };   // for ✦ AI to read the digits
+  };
   window.__scale = async (b64, max) => ({ b64: b64of(shrink(await loadImg("data:image/jpeg;base64," + b64), max), "image/jpeg", 0.85) });
   // The photo on the image model's canvas (its sizes are fixed), with grey bars, so the drawing lines up with the photo.
   window.__letterbox = async (b64, cw, ch) => {
@@ -2578,6 +2738,7 @@ function clientApp() {
   function statusOf(x) {
     if (x.busy) return ["busy", { prepare: "✦ Preparing", post: "Posting", draft: "Saving the draft", fix: "✦ Fixing", fill: "Loading Vinted's fields", specs: "✦ Looking up" }[x.busy.kind] || "Working…"];
     if (x.queued) { const n = ((S.prep && S.prep.queue) || []).indexOf(x.id) + 1; return ["queue", n ? `✦ In line · ${n}` : "✦ In line"]; }
+    if (x.postWait) return ["queue", `Waiting to post · ${x.postWait}`];
     if (x.status === "posted") return x.vinted && x.vinted.draft ? ["done", "Draft on Vinted"] : ["done", "On Vinted"];
     if (x.err) return ["warn", "Needs a look"];
     if (!x.missing.length) return ["ok", "Ready to post"];
@@ -2597,7 +2758,7 @@ function clientApp() {
   // ---- an item to post: what's wrong with it, its price and a Post button, right on the list ----
   function issuesOf(x) {
     const out = [], L = x.listing || {};
-    if (x.busy || x.queued) return out;
+    if (x.busy || x.queued || x.postWait) return out;
     const miss = x.missing.length && (x.ai || L.title) ? "Still needed: " + x.missing.join(", ") : "";
     const A = x.errAI;
     if (x.err && !(miss && /^Still needed/.test(x.err))) out.push(["bad", A && A.title ? `${A.title}. ${A.text}` : x.err + (A && A.pending ? " (✦ putting it in plain words…)" : "")]);
@@ -2606,12 +2767,13 @@ function clientApp() {
     const nc = x.photos.filter(p => p.err && !p.clean).length;
     if (nc) out.push(["soft", `${nc} photo${nc === 1 ? " wasn't" : "s weren't"} cleaned; the original${nc === 1 ? " is" : "s are"} used`]);
     if (x.ai && x.ai.confidence && x.ai.confidence < 0.6) out.push(["soft", "✦ AI wasn't sure what this is; check the title and category"]);
+    if (x.ai && x.ai.barcodeSeen && !x.ai.barcode) out.push(["soft", "A barcode is in the photos but couldn't be read. A sharp close-up of it (filling the photo) helps"]);
     return out;
   }
   function pcard(x) {
     const L = x.listing || {}, [k, st] = statusOf(x), th = x.photos.filter(p => thumb(p)).slice(0, 3);
     const title = L.title || (x.ai && x.ai.what) || x.hint || "New item", iss = issuesOf(x), bad = iss.some(i => i[0] === "bad");
-    const idle = !x.busy && !x.queued, prepared = !!(x.ai || L.title), ready = idle && prepared && !x.missing.length, cd = posting[x.id];
+    const idle = !x.busy && !x.queued && !x.postWait, prepared = !!(x.ai || L.title), ready = idle && prepared && !x.missing.length, cd = posting[x.id];
     const P = x.opts && x.opts.price;
     let row = "";
     if (idle && prepared) row = `<div class="pc-row">
@@ -2621,6 +2783,7 @@ function clientApp() {
         ${ready ? `<button class="primary pc-post ${cd ? "armed" : ""}" data-act="cpost" data-v="${x.id}" ${S.vinted.ok || cd ? "" : "disabled"}>${cd ? `Posting in ${cd.left} · Undo` : "Post"}</button>`
           : `<button class="sm pc-fix" data-act="open" data-v="${x.id}">Fix ›</button>`}</div>
       ${ready && !S.vinted.ok ? `<small class="pc-note">Sign in to Vinted to post</small>` : P && P.low ? `<small class="pc-note">Vinted suggests ${money(P.low)}–${money(P.high)}</small>` : ""}`;
+    else if (x.postWait) row = `<div class="pc-row"><small class="muted grow">Posts go to Vinted one at a time</small><button class="sm" data-act="postcancel" data-v="${x.id}">Don't post</button></div>`;
     else if (idle && S.settings.hasKey && x.photos.length) row = `<div class="pc-row"><small class="muted grow">${x.err ? "Preparing didn't finish" : "Not prepared yet"}</small><button class="sm" data-act="cprep" data-v="${x.id}">${x.err ? "✦ Try again" : "✦ Prepare"}</button></div>`;
     return `<div class="card pc ${bad ? "bad" : ready ? "ready" : ""}">
       <button class="pc-top" data-act="open" data-v="${x.id}">
@@ -2637,9 +2800,9 @@ function clientApp() {
   function prepBar(list) {
     const R = S.prep || {}, active = R.running || (R.queue || []).length;
     if (active && R.total) {
-      const cur = R.cur && byId(R.cur), p = Math.min(1, ((R.done || 0) + (cur && cur.busy ? cur.busy.p || 0 : 0)) / R.total);
-      return `<div class="prepbar"><div class="pb-h"><span class="busy-dot"></span><b>✦ Preparing ${R.total} item${R.total === 1 ? "" : "s"}, one by one</b><button class="sm" data-act="prepstop">Stop</button></div>
-        <span class="pbar mini wide"><i style="width:${Math.max(3, Math.round(p * 100))}%"></i></span><small class="muted">${R.done || 0} of ${R.total} done${cur ? " · now: " + esc(clip2((cur.listing || {}).title || cur.hint || "an item", 34)) : ""}</small></div>`;
+      const curs = (R.curs || []).map(byId).filter(Boolean), p = Math.min(1, ((R.done || 0) + curs.reduce((a, c) => a + (c.busy ? c.busy.p || 0 : 0), 0)) / R.total);
+      return `<div class="prepbar"><div class="pb-h"><span class="busy-dot"></span><b>✦ Preparing ${R.total} item${R.total === 1 ? "" : "s"}${S.cfg.prepAtOnce > 1 && R.total > 1 ? `, ${Math.min(S.cfg.prepAtOnce, R.total)} at a time` : ""}</b><button class="sm" data-act="prepstop">Stop</button></div>
+        <span class="pbar mini wide"><i style="width:${Math.max(3, Math.round(p * 100))}%"></i></span><small class="muted">${R.done || 0} of ${R.total} done${curs.length ? " · now: " + curs.map(c => esc(clip2((c.listing || {}).title || c.hint || "an item", curs.length > 1 ? 22 : 34))).join(", ") : ""}</small></div>`;
     }
     const fresh = list.filter(x => !x.ai && !x.busy && !x.queued && x.photos.length && !(x.listing || {}).title);
     const ok = list.filter(x => !x.busy && !x.queued && !x.err && (x.ai || (x.listing || {}).title) && !x.missing.length).length;
@@ -2948,12 +3111,12 @@ function clientApp() {
       ${S.settings.canClean && x.photos.some(p => p.clean) && !x.busy ? `<button class="link small block" data-act="reclean">Clean the photos again</button>` : ""}`}
       <div id="itembusy">${topBusy ? busyHTML(x.busy, x) : ""}</div>
       ${x.err && !errAtPost && !topBusy ? errHTML(x) : ""}
-      ${x.ai ? `<p class="ailbl"><span class="badge-ai">✦ AI listing by ${esc(x.ai.by)}</span>${x.ai.confidence && x.ai.confidence < 0.6 ? ` <span class="muted small">not sure; check it</span>` : ""}${x.ai.flaws && x.ai.flaws.length ? `<small class="muted">Wear seen: ${esc(x.ai.flaws.join("; "))}</small>` : ""}</p>` : ""}
+      ${x.ai ? `<p class="ailbl"><span class="badge-ai">✦ AI listing by ${esc(x.ai.by)}</span>${x.ai.confidence && x.ai.confidence < 0.6 ? ` <span class="muted small">not sure; check it</span>` : ""}${x.ai.flaws && x.ai.flaws.length ? `<small class="muted">Wear seen: ${esc(x.ai.flaws.join("; "))}</small>` : ""}${x.ai.barcode ? `<small class="muted">Barcode ${esc(x.ai.barcode)} · ${{ scan: "scanned", zoom: "scanned up close", "ai-zoom": "✦ read up close, check digit right", ai: "✦ read, check digit right" }[x.ai.barcodeVia] || "read"}</small>` : x.ai.barcodeSeen ? `<small class="muted">A barcode is in the photos but couldn't be read; a sharp close-up of it helps</small>` : ""}</p>` : ""}
       ${posted2 ? `<p class="hint">${esc(L.title || "")} · ${money(L.price)}</p>` : fieldsHTML(x)}
       ${posted2 ? "" : `<div id="postarea">
       ${miss.length ? `<p class="miss">Still needed: ${esc(miss.join(", "))}</p>${!x.err ? fixBtnHTML(x) : ""}` : ""}
       ${x.err && errAtPost && !postBusy ? errHTML(x) : fixNoteHTML(x)}
-      ${postBusy ? progBtnHTML(x.busy) : `<button class="primary wide post ${armed === "post" + x.id ? "armed" : ""}" data-act="post" ${canPost ? "" : "disabled"}>${armed === "post" + x.id ? "Tap again to post on Vinted" : x.err && errAtPost ? "Post again" : "Post on Vinted"}</button>`}
+      ${postBusy ? progBtnHTML(x.busy) : x.postWait ? progBtnHTML({ kind: "post", p: 0, steps: [{ t: x.postWait > 1 ? `Waiting: ${x.postWait - 1} to post before it` : "Next to post" }] }) + `<button class="link small block" data-act="postcancel" data-v="${x.id}">Don't post it</button>` : `<button class="primary wide post ${armed === "post" + x.id ? "armed" : ""}" data-act="post" ${canPost ? "" : "disabled"}>${armed === "post" + x.id ? "Tap again to post on Vinted" : x.err && errAtPost ? "Post again" : "Post on Vinted"}</button>`}
       <button class="sm wide" data-act="draft" ${!x.busy && S.vinted.ok && L.title && x.photos.length ? "" : "disabled"}>Save as a Vinted draft</button></div>
       ${S.vinted.ok ? "" : `<p class="note center">Posting needs you signed in to Vinted. <button class="link small" data-act="vsignin">Sign in</button></p>`}`}
       <button class="sm wide danger ${armed === "del" + x.id ? "armed" : ""}" data-act="delitem">${armed === "del" + x.id ? "Confirm: delete from Vintly" : posted2 ? "Remove from Vintly" : "Delete item"}</button>
@@ -3197,6 +3360,7 @@ function clientApp() {
       case "aifix": { const y = byId(v || openId); if (!y || y.busy) break; y.busy = startBusy("fix", "✦ Working out what went wrong"); send("aifix", { id: y.id }); renderItem(); render(); break; }
       case "cprep": { const y = byId(v); if (y) { y.queued = true; render(); } send("prepq", { id: v }); break; }
       case "prepall": send("prepall", {}); break;
+      case "postcancel": send("postcancel", { id: v }); break;
       case "prepstop": send("prepstop", {}); break;
       case "cprice": {   // − / + on a card: by the rounding step (Settings › Pricing)
         const id = t.dataset.id, y = byId(id); if (!y) break;
