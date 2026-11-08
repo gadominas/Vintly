@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -782,7 +782,8 @@ function findOptions(j) {
 }
 async function vParcels(catId) {
   try {
-    const a = await vjs(`return await window.__vt.api(${JSON.stringify(vApiHost() + "/shipping-estimation/external/catalogs/" + (+catId) + "/package_sizes")});`, 30000);
+    const lang = (VINTED_SITES[siteOf()] || [])[2] || "en";   // asked in the site's language: without it the names came back in French
+    const a = await vjs(`return await window.__vt.api(${JSON.stringify(vApiHost() + "/shipping-estimation/external/catalogs/" + (+catId) + "/package_sizes")}, { headers: { "accept-language": ${JSON.stringify(lang + ";q=1, en;q=0.5")} } });`, 30000);
     const list = a.status === 200 ? findOptions(a.j).filter(o => o.id < 1000) : [];
     return list.length ? list.slice(0, 8) : PARCELS_FALLBACK;
   } catch (e) { return PARCELS_FALLBACK; }
@@ -1395,8 +1396,8 @@ const busy = {};   // item id → { steps: [{ t, done }], p } while preparing or
 // The steps of a long job for the page: each step's text, the overall progress (0…1, never going back), the photos
 // being worked on (ph) and how (phase: clean, read, match, upload). Inside a stage, steps without a number of their
 // own move the bar part of the way towards the stage's end.
-function stepper(id) {
-  const b = busy[id] = busy[id] || { steps: [], p: 0, t0: Date.now(), ph: [], phase: "" };
+function stepper(id, kind = "prepare") {   // kind: prepare, post, draft, fix, fill, specs: the page shows each next to its own button
+  const b = busy[id] = busy[id] || { steps: [], p: 0, t0: Date.now(), ph: [], phase: "", kind };
   let lo = 0, hi = 1, k = 0;
   const step = (t, p, ph, phase) => {
     const last = b.steps[b.steps.length - 1]; if (last) last.done = true;
@@ -1412,10 +1413,10 @@ function stepper(id) {
 async function prepare(id, opts = {}) {
   const it = byId(id);
   if (!it || busy[id]) return;
-  const step = stepper(id);
+  const step = stepper(id, "prepare");
   const t0 = Date.now();
   let cleaned = 0, failedClean = 0;
-  it.err = ""; it.errInfo = null;
+  clearErr(it); it.fixNote = null;
   // The bar's stages, by how long each part takes: about 3 per photo cleaned, 3 for reading, 4 for Vinted's fields
   const doClean = opts.clean !== false && canClean(), nClean = doClean ? it.photos.filter(p => !p.clean || opts.reclean).length : 0;
   const doRead = !!aiKey() && opts.read !== false, doSpecs = doRead && settings.aiSpecs !== false;
@@ -1442,10 +1443,10 @@ async function prepare(id, opts = {}) {
     }
     step.stage(endRead, 0.98); step.focus(it.photos.slice(0, 1).map(p => p.id), "match");
     if (settings.vintedOk || await vintedCheck()) await fitVinted(it, step);
-    else it.err = "Sign in to Vinted (Settings › Vinted) to fill in Vinted's fields.";
+    else { it.err = "Sign in to Vinted (Settings › Vinted) to fill in Vinted's fields."; it.errFrom = "prepare"; }
     it.status = "ready";
     track("item_prepared", { provider: aiKey() ? settings.aiProvider : "none", photos: it.photos.length, vinted: !!it.fitAt, seconds: Math.round((Date.now() - t0) / 1000) });
-  } catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; startLog("prepare: " + it.err); }
+  } catch (e) { setErr(it, e, "prepare"); startLog("prepare: " + it.err); }
   delete busy[id];
   write("items", items); push(); saveWidget(widgetSnapshot());
   if (failedClean) toast(`${failedClean} photo${failedClean === 1 ? "" : "s"} couldn't be cleaned; the originals are kept`);
@@ -1454,8 +1455,8 @@ async function prepare(id, opts = {}) {
 async function postItem(id, asDraft) {
   const it = byId(id);
   if (!it || busy[id]) return;
-  const step = stepper(id);
-  it.err = ""; it.errInfo = null;
+  const step = stepper(id, asDraft ? "draft" : "post");
+  clearErr(it);
   try {
     if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted).");
     let s0 = 0;
@@ -1465,13 +1466,158 @@ async function postItem(id, asDraft) {
     if (miss.length) throw new Error("Still needed: " + miss.join(", "));
     const r = await vPost(it, asDraft, (t, p, ph, phase) => step(t, p, ph, phase));
     it.vinted = { id: r.id, url: r.url, at: Date.now(), draft: !!asDraft };
-    it.status = "posted";
+    it.status = "posted"; it.fixNote = null;
     it.cover = thumbURL(it.id, it.photos[0].id, it.photos[0].use === "clean" && it.photos[0].clean ? "ct" : "t");
     const dec = decorFor(it);
     track("item_posted", { photos: it.photos.length, mode: asDraft ? "draft" : "post", cleaned: it.photos.filter(p => p.use === "clean" && p.clean).length, decor: dec.stickers ? (dec.qr ? "both" : "stickers") : dec.qr ? "qr" : "none" });
     if (settings.removePhotosAfter) { removeItemFiles(it.id); it.photos = it.photos.map(p => ({ id: p.id, w: p.w, h: p.h, gone: true })); }
     toast(asDraft ? "Saved as a draft on Vinted" : "Posted on Vinted 🎉");
-  } catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; startLog("post: " + it.err + (e.vinted ? "\n" + clip(e.vinted.raw, 600) : "")); }
+  } catch (e) { setErr(it, e, "post"); startLog("post: " + it.err + (e.vinted ? "\n" + clip(e.vinted.raw, 600) : "")); }
+  delete busy[id];
+  write("items", items); push(); saveWidget(widgetSnapshot());
+}
+
+// ---------- errors in plain words, and ✦ Fix with AI ----------
+// Every failure keeps what happened (err, errInfo with Vinted's answer, errFrom: which button), and ✦ AI puts it in
+// plain words for the page (errAI). Fix with AI hands the error, the listing and every choice Vinted offers to the AI,
+// which decides what to change; Vintly checks each change against Vinted's own lists before it applies it.
+function clearErr(it) { it.err = ""; it.errInfo = null; it.errAI = null; it.errFrom = ""; }
+function setErr(it, e, from) {
+  it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; it.errFrom = from; it.errAI = null;
+  if (wantsExplain(it)) explainErr(it).catch(() => {});
+}
+const wantsExplain = it => !!(aiKey() && it.err && it.status !== "posted" && !/sign in|signed out/i.test(it.err) && !/^Still needed/.test(it.err));
+function listingFacts(it) {
+  const L = it.listing || {}, O = it.opts || {}, attrs = O.attrs || [], colors = vCacheGet().colors || [];
+  const cond = (attrs.find(a => a.code === "condition") || {}).options || CONDITIONS.map(c => ({ id: c.id, title: c.en }));
+  const optT = (a, ids) => (ids || []).map(id => (a.options.find(o => o.id === +id) || {}).title || id).join(", ") || "not chosen";
+  return [
+    `Title: ${L.title || "(none)"}`, `Description: ${clip(L.description || "(none)", 500)}`,
+    `Price: ${L.price || "(none)"} ${currencyOf()}${O.price ? ` (Vinted suggests ${O.price.low}–${O.price.high})` : ""}`,
+    `Category: ${L.catalogPath || "(none)"}`, `Brand: ${L.brandTitle || "none"}${L.brandTitle && !L.brandId ? " (not in Vinted's brand list)" : ""}`,
+    `Condition: ${(cond.find(o => o.id === +L.conditionId) || {}).title || "not chosen"}`,
+    `Colours: ${(L.colorIds || []).map(id => (colors.find(c => c.id === +id) || {}).title || id).join(", ") || "none"}`,
+    `Parcel size: ${((O.parcels || PARCELS_FALLBACK).find(p => p.id === +L.packageSizeId) || {}).title || "not chosen"}`,
+    ...attrs.filter(a => a.code !== "condition").map(a => `${a.title} [${a.code}${a.required ? ", required" : ""}]: ${optT(a, (L.attrs || {})[a.code])}`),
+  ].join("\n");
+}
+function errFacts(it) {
+  const E = it.errInfo || {};
+  return [`What failed: ${{ post: "posting it on Vinted", draft: "saving it as a Vinted draft", prepare: "preparing the listing", fill: "loading Vinted's fields" }[it.errFrom] || "posting it"}`,
+    `The error: ${it.err || "none"}`,
+    (E.problems || []).length ? "Vinted's problems: " + E.problems.map(p => `${p.label || p.field || "?"}: ${p.text || "not accepted"}`).join("; ") : "",
+    E.raw ? `Vinted's answer (HTTP ${E.status}): ${clip(E.raw, 1200)}` : ""].filter(Boolean).join("\n");
+}
+const explaining = new Set();
+async function explainErr(it) {
+  const key = it.err;
+  it.errAI = { pending: true }; explaining.add(it.id);
+  try {
+    const txt = await aiCall("You explain errors to someone selling second-hand things on Vinted through an app. Plain, friendly words, no codes or jargon. Reply with JSON only.",
+      `${errFacts(it)}\n\nThe listing:\n${listingFacts(it)}\n\n` +
+      `Reply {"title": "what went wrong, at most 7 words", "text": "one or two short sentences: what it means and what would fix it", ` +
+      `"fixable": true if changing the listing's fields could fix it, false if not (Vinted down, signed out, a network problem)}. Write in English.`, 400, "fix");
+    const j = parseJSON(txt);
+    if (it.err === key) it.errAI = { title: clip(j.title || "", 70), text: clip(j.text || "", 320), fixable: j.fixable !== false, by: PROVIDERS[settings.aiProvider] };
+  } catch (e) { if (it.err === key) it.errAI = null; startLog("explain: " + (e.message || e)); }
+  explaining.delete(it.id);
+  write("items", items); push();
+}
+// One round of changes from the AI, each checked against Vinted's own lists. Returns what changed, in words.
+async function applyFix(it, c, step) {
+  const L = it.listing = it.listing || {}, O = it.opts = it.opts || {}, out = [];
+  let catChanged = false;
+  if (typeof c.title === "string" && c.title.trim().length >= 5 && c.title.trim() !== L.title) { L.title = clip(c.title.trim(), 100); L.titleSet = true; out.push("Title"); }
+  if (typeof c.description === "string" && c.description.trim().length >= 5 && c.description.trim() !== L.description) { L.description = clip(c.description.trim(), 3000); L.descSet = true; out.push("Description"); }
+  const pr = Number(String(c.price == null ? "" : c.price).replace(",", "."));
+  if (pr > 0 && pr !== L.price) { L.price = Number(pr.toFixed(2)); L.priceSet = true; out.push(`Price → ${L.price} ${currencyOf()}`); }
+  let cat = null;
+  if (c.category && (O.cats || [])[+c.category - 1]) cat = O.cats[+c.category - 1];
+  else if (typeof c.categorySearch === "string" && c.categorySearch.trim()) { step("Looking up a better category"); try { cat = (await catSearch([c.categorySearch.trim()], 5))[0] || null; } catch (e) {} }
+  if (cat && +cat.id !== +L.catalogId) {
+    L.catalogId = +cat.id; L.catalogPath = cat.path || catPath(+cat.id); L.catSet = true;
+    step("Loading the new category's fields"); await loadCatFields(it);
+    catChanged = true; out.push(`Category → ${L.catalogPath.split(" › ").slice(-1)[0]}`);
+  }
+  const attrs = O.attrs || [], cond = attrs.find(a => a.code === "condition"), condOpts = cond ? cond.options : CONDITIONS.map(x => ({ id: x.id, title: x.en }));
+  if (c.conditionId && condOpts.some(o => o.id === +c.conditionId) && +c.conditionId !== +L.conditionId) { L.conditionId = +c.conditionId; L.condSet = true; out.push(`Condition → ${condOpts.find(o => o.id === +c.conditionId).title}`); }
+  if (typeof c.brand === "string") {
+    const want = c.brand.trim();
+    if (norm(want) !== norm(L.brandTitle)) {
+      L.brandId = null; L.brandTitle = clip(want, 60); L.brandSet = true;
+      if (want) { try { const hit = (await vBrands(want, L.catalogId)).find(b => norm(b.title) === norm(want)); if (hit) { L.brandId = hit.id; L.brandTitle = hit.title; } } catch (e) {} }
+      out.push(want ? `Brand → ${L.brandTitle}` : "No brand");
+    }
+  }
+  for (const [code, v] of Object.entries(c.attrs && typeof c.attrs === "object" ? c.attrs : {})) {
+    const a = attrs.find(x => x.code === code && x.code !== "condition"); if (!a) continue;
+    const ids = [].concat(v).map(Number).filter(id => a.options.some(o => o.id === id)).slice(0, a.multi ? a.limit : 1);
+    if (!ids.length || JSON.stringify(ids) === JSON.stringify(((L.attrs || {})[code] || []).map(Number))) continue;
+    L.attrs = Object.assign({}, L.attrs, { [code]: ids }); L.attrSet = Object.assign({}, L.attrSet, { [code]: true });
+    out.push(`${a.title} → ${ids.map(id => a.options.find(o => o.id === id).title).join(", ")}`);
+  }
+  if (Array.isArray(c.colorIds)) {
+    const colors = vCacheGet().colors || [], ids = c.colorIds.map(Number).filter(id => colors.some(x => x.id === id)).slice(0, 2);
+    if (ids.length && JSON.stringify(ids) !== JSON.stringify((L.colorIds || []).map(Number))) { L.colorIds = ids; L.colorSet = true; out.push(`Colours → ${ids.map(id => colors.find(x => x.id === id).title).join(", ")}`); }
+  }
+  const parcels = O.parcels || PARCELS_FALLBACK;
+  if (c.packageSizeId && parcels.some(p => p.id === +c.packageSizeId) && +c.packageSizeId !== +L.packageSizeId) { L.packageSizeId = +c.packageSizeId; L.parcelSet = true; out.push(`Parcel → ${parcels.find(p => p.id === +c.packageSizeId).title}`); }
+  return { changed: out, catChanged };
+}
+function fixPrompt(it, round) {
+  const L = it.listing || {}, O = it.opts || {}, A = it.ai || {}, attrs = O.attrs || [], colors = vCacheGet().colors || [];
+  const cond = attrs.find(a => a.code === "condition"), condOpts = cond ? cond.options : CONDITIONS.map(c => ({ id: c.id, title: c.en }));
+  const miss = missingFor(it);
+  return (round ? `You just changed the category to ${L.catalogPath}. Now fill in what this category still needs.\n\n` : "") +
+    `${it.err ? errFacts(it) : "Nothing failed yet, but the listing can't be posted."}\n${miss.length ? "Still needed before posting: " + miss.join(", ") + "\n" : ""}\n` +
+    `What the item is: ${A.what || L.title || "unknown"}${A.brand ? ", brand " + A.brand : ""}${A.size ? ", size or age " + A.size : ""}${(A.materials || []).length ? ", materials " + A.materials.join(", ") : ""}. ` +
+    `Seller's note: ${it.notes ? clip(it.notes, 300) : "none"}. The listing is written in ${LANGS[settings.lang] || "the site's language"}.\n\n` +
+    `The listing now:\n${listingFacts(it)}\n\nChoices (use these ids only):\nCondition: ${condOpts.map(o => `${o.id}=${o.title}`).join("; ")}\n` +
+    attrs.filter(a => a.code !== "condition").map(a => `Field ${a.code} (${a.title}${a.required ? ", required" : ""}${a.multi ? ", up to " + a.limit : ", one"}): ` +
+      a.options.slice(0, 160).map(o => `${o.id}=${o.group ? o.group + "/" : ""}${o.title}`).join("; ")).join("\n") + "\n" +
+    `Colours (up to 2): ${colors.map(c => `${c.id}=${c.title}`).join("; ")}\nParcel sizes: ${(O.parcels || PARCELS_FALLBACK).map(p => `${p.id}=${p.title}`).join("; ")}\n` +
+    `Other categories:\n${(O.cats || []).map((c, i) => `${i + 1}. ${c.path}`).join("\n") || "(none listed)"}\n\n` +
+    `Reply {"explain": "one or two plain sentences for the seller: what was wrong and what you changed", "changes": {only the keys you change: ` +
+    `"title", "description" (in the listing's language), "price" (number), "category" (number from Other categories) or "categorySearch" (a few words to look a category up), ` +
+    `"brand" (name, "" for none), "conditionId", "attrs": {"<field code>": [ids]}, "colorIds": [ids], "packageSizeId"}}. ` +
+    `Change only what fixes the problem. If nothing in the listing can fix it (Vinted is down, a network problem), reply with empty changes and say so.`;
+}
+async function aiFix(id) {
+  const it = byId(id);
+  if (!it || busy[id]) return;
+  if (!aiKey()) return toast("Add a Claude or OpenAI key in Settings › AI settings");
+  const step = stepper(id, "fix"), notes = [], changed = [];
+  try {
+    step("✦ Working out what went wrong", 0.08);
+    if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted).");
+    const L = it.listing = it.listing || {}, O = it.opts = it.opts || {};
+    if (L.catalogId && !O.attrs) await loadCatFields(it);
+    if (!(O.cats || []).length) { try { await vCatalogs(); O.cats = await catSearch(((it.ai || {}).words || []).concat([(it.ai || {}).what, L.title].filter(Boolean)), 20); } catch (e) {} }
+    for (let round = 0; round < 2; round++) {
+      step(round ? "✦ Filling in the new category's fields" : "✦ Deciding what to change", round ? 0.6 : 0.25);
+      const j = parseJSON(await aiCall("You fix a Vinted listing that Vinted refused or that is missing fields. Change only what is needed. Choose ids only from the lists given. Reply with JSON only.",
+        fixPrompt(it, round), 1500, "fix"));
+      if (j.explain) notes.push(clip(j.explain, 300));
+      step("Applying the changes", round ? 0.8 : 0.5);
+      const r = await applyFix(it, j.changes || {}, step);
+      changed.push(...r.changed);
+      if (!r.catChanged || !missingFor(it).length) break;
+    }
+    if (changed.length && it.listing.catalogId && it.listing.conditionId) {
+      step("Checking Vinted's price", 0.9);
+      try { it.opts.price = await vPrice(it.listing.catalogId, it.listing.brandId, it.listing.conditionId, it.opts.imageId ? [it.opts.imageId] : []); } catch (e) {}
+    }
+    if (changed.length) {
+      clearErr(it);
+      it.fixNote = { text: notes.join(" "), changes: changed, by: PROVIDERS[settings.aiProvider], at: Date.now() };
+      if (it.status === "new" && it.listing.title) it.status = "ready";
+      toast(missingFor(it).length ? "✦ Fixed what AI could; something is still needed" : "✦ Fixed. Check it and post");
+    } else {
+      it.errAI = { title: (it.errAI && it.errAI.title) || "AI couldn't fix this one", text: notes.join(" ") || "Nothing in the listing seems to be the cause. Try posting again later.", fixable: false, by: PROVIDERS[settings.aiProvider] };
+      toast("✦ AI found nothing to change in the listing");
+    }
+    track("ai_fixed", { changes: changed.length, ready: !missingFor(it).length, from: it.errFrom || "missing" });
+  } catch (e) { toast("Fix with AI didn't work: " + String(e.message || e).slice(0, 80)); startLog("fix: " + (e.message || e)); }
   delete busy[id];
   write("items", items); push(); saveWidget(widgetSnapshot());
 }
@@ -1611,7 +1757,7 @@ function itemView(it) {
   const posted = it.status === "posted";
   return {
     id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", specs: it.specs || null, specsIn: !!(it.specs && it.listing && it.listing.specsBlock && String(it.listing.description || "").includes(it.listing.specsBlock)),
-    err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null,
+    err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null, errAI: it.err && it.errAI && (!it.errAI.pending || explaining.has(it.id)) ? it.errAI : null, errFrom: it.errFrom || "", fixNote: it.fixNote || null,
     listing: it.listing || {}, ai: it.ai || null, vinted: it.vinted || null, cover: it.cover || "", fitAt: it.fitAt || 0,
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
@@ -1897,12 +2043,13 @@ async function handle(m) {
     }
     case "fill": {
       if (!it || busy[it.id]) return;
-      const step = stepper(it.id);
-      try { if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted)."); await fitVinted(it, step); it.err = ""; it.errInfo = null; }
-      catch (e) { it.err = clip(e.message || e, 300); it.errInfo = e.vinted || null; }
+      const step = stepper(it.id, "fill");
+      try { if (!settings.vintedOk && !(await vintedCheck())) throw new Error("Sign in to Vinted first (Settings › Vinted)."); await fitVinted(it, step); clearErr(it); }
+      catch (e) { setErr(it, e, "fill"); }
       delete busy[it.id]; write("items", items); return push();
     }
     case "post": return postItem(m.id, !!m.draft);
+    case "aifix": return aiFix(m.id);
     case "catsearch": {
       let res = [];
       try { res = await catSearch(String(m.q || "").split(/[,;]+/).map(s => s.trim()).filter(Boolean).concat(String(m.q || "")), 25); }
@@ -1933,7 +2080,7 @@ async function handle(m) {
       if (!it || busy[it.id]) return;
       if (!aiKey()) return toast("Add a Claude or OpenAI key in Settings › AI settings");
       if (!it.ai) return toast("Prepare the item first, so ✦ AI knows what it is");
-      const step = stepper(it.id);
+      const step = stepper(it.id, "specs");
       step("✦ Looking up the technical details", 0.1, it.photos.slice(0, 1).map(p => p.id), "search");
       try { const S = await lookUpSpecs(it); toast(S.list.length ? `${S.list.length} technical details found` : "No technical details found for this item"); track("specs_found", { specs: S.list.length, via: S.via, match: S.match }); }
       catch (e) { toast(String(e.message || e)); }
@@ -1963,7 +2110,7 @@ function clientApp() {
   let S = window.__INIT;
   const look = { theme: S.settings.theme || "auto", density: S.settings.density || "comfortable", font: S.settings.font || "sans", textSize: +S.settings.textSize || 1 };
   let tab = ["posted", "msgs"].includes(S.settings.tab) ? S.settings.tab : "todo";
-  let vOpen = null, convOpen = false, replyDraft = "", lastErr = "";   // a Vinted listing's sheet, the conversation sheet
+  let vOpen = null, convOpen = false, replyDraft = "";   // a Vinted listing's sheet, the conversation sheet
   let openId = null, cfgOpen = false, cfgArmed = false, aiOpen = false, aiArmed = null, armed = null, batchOpen = !!S.batch;
   let importTarget = "", tray = 0, importing = 0, panel = null;   // panel: "cat" or "brand", open inside the item sheet
   let catRes = null, brandRes = null, brandQ = "", catQ = "";
@@ -1974,7 +2121,7 @@ function clientApp() {
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const PN = { anthropic: "Claude", openai: "OpenAI" };
-  const FEAT = { listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", specs: "Technical details (web)", test: "Connection tests", other: "Other" };
+  const FEAT = { fix: "Explaining and fixing errors", listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", specs: "Technical details (web)", test: "Connection tests", other: "Other" };
   const byId = id => S.items.find(x => x.id === id);
 
   // ---- appearance (app-blueprints · settings, Step 3) ----
@@ -2121,7 +2268,7 @@ function clientApp() {
     const x = byId(id); if (!x) return;
     x.busy = b; render();
     if (openId !== id) return;
-    if (!patchBusy($("#itembusy"), b, x)) renderItem(); else markScan(b);
+    if (BTN_KINDS.includes(b.kind) ? patchProg(b) : patchBusy($("#itembusy"), b, x)) markScan(b); else renderItem();
   };
   window.onImported = n => { importing = 0; renderTray(); if (!n) window.toast("No photos came in. Try again."); };
   window.onCats = (id, list) => { if (openId === id) { catRes = list; renderItem(); } };
@@ -2429,7 +2576,7 @@ function clientApp() {
       .map(([k, l, n, hot]) => `<button class="${tab === k ? "on" : ""}" data-act="tab" data-v="${k}">${l} <span class="n ${hot && n ? "hot" : ""}">${n}</span></button>`).join("");
   }
   function statusOf(x) {
-    if (x.busy) return ["busy", (S.prep && S.prep.cur === x.id) || (x.busy.steps[0] && /✦|Cleaning/.test(x.busy.steps[0].t)) ? "✦ Preparing" : "Working…"];
+    if (x.busy) return ["busy", { prepare: "✦ Preparing", post: "Posting", draft: "Saving the draft", fix: "✦ Fixing", fill: "Loading Vinted's fields", specs: "✦ Looking up" }[x.busy.kind] || "Working…"];
     if (x.queued) { const n = ((S.prep && S.prep.queue) || []).indexOf(x.id) + 1; return ["queue", n ? `✦ In line · ${n}` : "✦ In line"]; }
     if (x.status === "posted") return x.vinted && x.vinted.draft ? ["done", "Draft on Vinted"] : ["done", "On Vinted"];
     if (x.err) return ["warn", "Needs a look"];
@@ -2452,7 +2599,9 @@ function clientApp() {
     const out = [], L = x.listing || {};
     if (x.busy || x.queued) return out;
     const miss = x.missing.length && (x.ai || L.title) ? "Still needed: " + x.missing.join(", ") : "";
-    if (x.err && !(miss && /^Still needed/.test(x.err))) out.push(["bad", x.err]);
+    const A = x.errAI;
+    if (x.err && !(miss && /^Still needed/.test(x.err))) out.push(["bad", A && A.title ? `${A.title}. ${A.text}` : x.err + (A && A.pending ? " (✦ putting it in plain words…)" : "")]);
+    if (!x.err && x.fixNote) out.push(["good", `✦ Fixed by AI: ${x.fixNote.changes.join(", ")}`]);
     if (miss) out.push(["bad", miss]);
     const nc = x.photos.filter(p => p.err && !p.clean).length;
     if (nc) out.push(["soft", `${nc} photo${nc === 1 ? " wasn't" : "s weren't"} cleaned; the original${nc === 1 ? " is" : "s are"} used`]);
@@ -2480,7 +2629,8 @@ function clientApp() {
         <span class="c-b"><b class="c-t">${esc(title)}</b><small class="muted">${L.catalogPath ? esc(L.catalogPath.split(" › ").slice(-1)[0]) : "Added " + rel(x.created)}</small>
           <span class="chip st-${k}">${st}${x.busy ? " " + Math.round((x.busy.p || 0) * 100) + "%" : ""}</span>${x.busy ? `<span class="pbar mini"><i style="width:${Math.max(3, Math.round((x.busy.p || 0) * 100))}%"></i></span><small class="muted pc-now">${esc((x.busy.steps[x.busy.steps.length - 1] || {}).t || "")}</small>` : ""}</span>
         ${idle && prepared ? `<span class="pc-chev" aria-hidden="true">›</span>` : `<span class="c-p">${L.price ? money(L.price) : ""}</span>`}</button>
-      ${iss.length ? `<ul class="pc-iss">${iss.map(([lv, t]) => `<li class="${lv}"><span aria-hidden="true">${lv === "bad" ? "⚠️" : "ℹ️"}</span><span>${esc(t.length > 160 ? t.slice(0, 159) + "…" : t)}</span></li>`).join("")}</ul>` : ""}
+      ${iss.length ? `<ul class="pc-iss">${iss.map(([lv, t]) => `<li class="${lv}"><span aria-hidden="true">${lv === "bad" ? "⚠️" : lv === "good" ? "✅" : "ℹ️"}</span><span>${esc(t.length > 220 ? t.slice(0, 219) + "…" : t)}</span></li>`).join("")}</ul>` : ""}
+      ${idle && canFix(x) ? `<button class="sm primary ai pc-aifix" data-act="aifix" data-v="${x.id}">✦ Fix with AI</button>` : ""}
       ${row}</div>`;
   }
   // Above the list: the line being prepared, or what's left to prepare, and how many are ready
@@ -2638,7 +2788,7 @@ function clientApp() {
       : `<div class="bb-ph idle" data-key=""><span class="orb"></span></div>`;
   }
   function stepsHTML(b) {
-    return b.steps.map(s => `<div class="step ${s.done ? "done" : ""}">${s.done ? "✓" : `<span class="busy-dot"></span>`}<span>${esc(s.t)}</span></div>`).join("");
+    return b.steps.slice(-4).map(s => `<div class="step ${s.done ? "done" : ""}">${s.done ? "✓" : `<span class="busy-dot"></span>`}<span>${esc(s.t)}</span></div>`).join("");
   }
   function busyHTML(b, x) {
     const pct = Math.round((b.p || 0) * 100), cur = b.steps[b.steps.length - 1];
@@ -2670,18 +2820,46 @@ function clientApp() {
       e.classList.toggle("scan", on); ["clean", "read", "search", "match", "upload"].forEach(k => e.classList.toggle("ph-" + k, on && b.phase === k));
     });
   }
-  // A refused request, in full: Vinted's headline, each problem by field, what it sent back, and a copy button
+  // A job shown in place of the button that started it: one line that changes, a bar that fills; the height never changes
+  const BTN_KINDS = ["post", "draft", "fix"];
+  function progBtnHTML(b) {
+    const pct = Math.round((b.p || 0) * 100), cur = b.steps[b.steps.length - 1];
+    return `<div class="progbtn k-${esc(b.kind || "")}" role="status" aria-live="polite"><i class="pg-fill" style="width:${Math.max(4, pct)}%"></i>
+      <span class="pg-t"><span class="busy-dot"></span><span class="pg-now">${esc(cur ? cur.t : "Working…")}</span></span><b class="pg-p">${pct}%</b></div>`;
+  }
+  function patchProg(b) {
+    const el = $("#itemsheet .progbtn");
+    if (!el || !el.classList.contains("k-" + b.kind)) return false;
+    const pct = Math.round((b.p || 0) * 100), cur = b.steps[b.steps.length - 1];
+    el.querySelector(".pg-fill").style.width = Math.max(4, pct) + "%";
+    el.querySelector(".pg-p").textContent = pct + "%";
+    el.querySelector(".pg-now").textContent = cur ? cur.t : "Working…";
+    return true;
+  }
+  const canFix = x => !!(S.settings.hasKey && x.status !== "posted" && (x.ai || (x.listing || {}).title) && (x.err || x.missing.length)
+    && !(x.err && x.errAI && x.errAI.fixable === false && !x.missing.length) && !/sign in|signed out/i.test(x.err || ""));
+  function fixBtnHTML(x) {
+    if (x.busy && x.busy.kind === "fix") return progBtnHTML(x.busy);
+    return canFix(x) ? `<button class="primary wide ai fixbtn" data-act="aifix" data-v="${x.id}" ${x.busy ? "disabled" : ""}>✦ Fix with AI</button>` : "";
+  }
+  // An error in plain words (✦ AI writes them), the fix button, and Vinted's own answer folded away under Details
   function errHTML(x) {
-    const E = x.errInfo;
-    if (!E) return `<div class="errbox" role="alert"><b>⚠️ Something went wrong</b><p>${esc(x.err)}</p><div class="eb-btns"><button class="sm" data-act="copyerr">Copy the details</button></div></div>`;
-    const probs = E.problems || [];
-    return `<div class="errbox" role="alert"><b>⚠️ ${esc(E.what || "Vinted said no")}</b>
-      <small class="muted">Vinted said: “${esc(E.message || "no reason given")}”${E.code ? " · " + esc(E.code) : ""} · HTTP ${E.status}</small>
-      ${probs.length ? `<ul class="eb-list">${probs.map(p => `<li>${p.label ? `<b>${esc(p.label)}</b>` : ""}<span>${esc(p.text || "not accepted")}</span>${p.field && p.field !== p.label ? `<code>${esc(p.field)}</code>` : ""}</li>`).join("")}</ul>`
-        : `<p>Vinted didn't say which field it didn't like. What it sent back is below; Copy the details and send them along if you need help.</p>`}
-      <details><summary>What Vinted sent back</summary><pre>${esc(E.raw || "")}</pre></details>
-      ${E.sent ? `<details><summary>What Vintly sent</summary><pre>${esc(E.sent)}</pre></details>` : ""}
-      <div class="eb-btns"><button class="sm" data-act="copyerr">Copy the details</button></div></div>`;
+    const E = x.errInfo, A = x.errAI, probs = (E && E.problems) || [];
+    const head = A && A.title ? A.title : E ? E.what || "Vinted said no" : "Something went wrong";
+    const body = A && A.text ? A.text : probs.length ? probs.map(p => (p.label ? p.label + ": " : "") + (p.text || "not accepted")).join(". ") : x.err;
+    return `<div class="errbox" role="alert"><b>⚠️ ${esc(head)}</b>
+      ${A && A.pending ? `<p class="muted eb-wait"><span class="busy-dot"></span>✦ Putting it in plain words…</p>` : `<p>${esc(body)}</p>${A && A.text ? `<small class="muted">✦ In plain words by ${esc(A.by)}</small>` : ""}`}
+      ${fixBtnHTML(x)}
+      <details><summary>Details</summary>
+        <p class="eb-raw">${esc(x.err)}</p>
+        ${E ? `<small class="muted">Vinted said: “${esc(E.message || "no reason given")}”${E.code ? " · " + esc(E.code) : ""} · HTTP ${E.status}</small>
+        ${probs.length ? `<ul class="eb-list">${probs.map(p => `<li>${p.label ? `<b>${esc(p.label)}</b>` : ""}<span>${esc(p.text || "not accepted")}</span>${p.field && p.field !== p.label ? `<code>${esc(p.field)}</code>` : ""}</li>`).join("")}</ul>` : ""}
+        <pre>${esc(E.raw || "")}</pre>${E.sent ? `<p class="muted small">What Vintly sent:</p><pre>${esc(E.sent)}</pre>` : ""}` : ""}
+        <div class="eb-btns"><button class="sm" data-act="copyerr">Copy the details</button></div></details></div>`;
+  }
+  function fixNoteHTML(x) {
+    const F = x.fixNote;
+    return F && !x.err ? `<div class="fixnote"><b>✦ Fixed by ${esc(F.by)}</b><span>${esc(F.changes.join(" · "))}</span>${F.text ? `<small class="muted">${esc(F.text)}</small>` : ""}</div>` : "";
   }
   function photosHTML(x) {
     if (x.status === "posted") return x.cover ? `<div class="strip"><div class="ph"><img src="${x.cover}" alt=""></div></div>` : "";
@@ -2750,9 +2928,15 @@ function clientApp() {
     el.classList.toggle("open", !!x); lockBody();
     if (!x) return;
     const ae = document.activeElement;
-    if (ae && el.contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) { const b = $("#itembusy"); if (b && !(x.busy && patchBusy(b, x.busy, x))) b.innerHTML = x.busy ? busyHTML(x.busy, x) : ""; markScan(x.busy); return; }   // never rebuild under your typing
+    if (ae && el.contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) {   // never rebuild under your typing
+      if (x.busy && BTN_KINDS.includes(x.busy.kind)) patchProg(x.busy);
+      else { const b = $("#itembusy"); if (b && !(x.busy && patchBusy(b, x.busy, x))) b.innerHTML = x.busy ? busyHTML(x.busy, x) : ""; }
+      markScan(x.busy); return;
+    }
     const L = x.listing || {}, posted2 = x.status === "posted", miss = x.missing;
     const canPost = !x.busy && S.vinted.ok && !miss.length;
+    const topBusy = x.busy && !BTN_KINDS.includes(x.busy.kind), postBusy = x.busy && (x.busy.kind === "post" || x.busy.kind === "draft");
+    const errAtPost = x.errFrom ? ["post", "draft"].includes(x.errFrom) : !!x.errInfo || /^Still needed/.test(x.err);   // where the error shows: next to the button that failed
     el.innerHTML = `<div class="sh-head"><h2>${esc(clip2(L.title || (x.ai && x.ai.what) || x.hint || "New item", 26))}</h2><button class="link" data-act="close">Done</button></div><div class="sh-body">
       ${photosHTML(x)}
       ${x.status !== "posted" && x.photos.length && (S.settings.stickers !== "off" || S.settings.qrBadge) ? `<button class="link small block" data-act="decoprev">👀 See the photos as buyers will</button>` : ""}
@@ -2762,24 +2946,22 @@ function clientApp() {
         <small class="note center">${S.settings.canClean ? "Cleans the photos, then " : ""}reads the photos, writes the listing${S.settings.aiSpecs ? ", looks up its technical details" : ""} and fills Vinted's fields${x.ai ? ". Fields you changed are kept" : ""}.</small>`
         : `<button class="sm wide" data-act="fill" ${x.busy || !S.vinted.ok ? "disabled" : ""}>Load Vinted's fields</button><small class="note center"><span class="badge-ex">no AI</span> Fill in the listing yourself, or add a key in Settings › AI settings.</small>`}
       ${S.settings.canClean && x.photos.some(p => p.clean) && !x.busy ? `<button class="link small block" data-act="reclean">Clean the photos again</button>` : ""}`}
-      <div id="itembusy">${x.busy ? busyHTML(x.busy, x) : ""}</div>
-      ${x.err && !x.busy ? errHTML(x) : ""}
+      <div id="itembusy">${topBusy ? busyHTML(x.busy, x) : ""}</div>
+      ${x.err && !errAtPost && !topBusy ? errHTML(x) : ""}
       ${x.ai ? `<p class="ailbl"><span class="badge-ai">✦ AI listing by ${esc(x.ai.by)}</span>${x.ai.confidence && x.ai.confidence < 0.6 ? ` <span class="muted small">not sure; check it</span>` : ""}${x.ai.flaws && x.ai.flaws.length ? `<small class="muted">Wear seen: ${esc(x.ai.flaws.join("; "))}</small>` : ""}</p>` : ""}
       ${posted2 ? `<p class="hint">${esc(L.title || "")} · ${money(L.price)}</p>` : fieldsHTML(x)}
-      ${posted2 ? "" : `${miss.length ? `<p class="miss">Still needed: ${esc(miss.join(", "))}</p>` : ""}
-      ${x.err && !x.busy ? `<button class="err-jump" data-act="toerr">⚠️ ${esc(x.errInfo ? x.errInfo.what : "It didn't work")}: ${x.errInfo && x.errInfo.problems && x.errInfo.problems.length ? x.errInfo.problems.length + " problem" + (x.errInfo.problems.length === 1 ? "" : "s") : "see why"} ↑</button>` : ""}
-      <button class="primary wide post ${armed === "post" + x.id ? "armed" : ""}" data-act="post" ${canPost ? "" : "disabled"}>${armed === "post" + x.id ? "Tap again to post on Vinted" : "Post on Vinted"}</button>
-      <button class="sm wide" data-act="draft" ${!x.busy && S.vinted.ok && L.title && x.photos.length ? "" : "disabled"}>Save as a Vinted draft</button>
+      ${posted2 ? "" : `<div id="postarea">
+      ${miss.length ? `<p class="miss">Still needed: ${esc(miss.join(", "))}</p>${!x.err ? fixBtnHTML(x) : ""}` : ""}
+      ${x.err && errAtPost && !postBusy ? errHTML(x) : fixNoteHTML(x)}
+      ${postBusy ? progBtnHTML(x.busy) : `<button class="primary wide post ${armed === "post" + x.id ? "armed" : ""}" data-act="post" ${canPost ? "" : "disabled"}>${armed === "post" + x.id ? "Tap again to post on Vinted" : x.err && errAtPost ? "Post again" : "Post on Vinted"}</button>`}
+      <button class="sm wide" data-act="draft" ${!x.busy && S.vinted.ok && L.title && x.photos.length ? "" : "disabled"}>Save as a Vinted draft</button></div>
       ${S.vinted.ok ? "" : `<p class="note center">Posting needs you signed in to Vinted. <button class="link small" data-act="vsignin">Sign in</button></p>`}`}
       <button class="sm wide danger ${armed === "del" + x.id ? "armed" : ""}" data-act="delitem">${armed === "del" + x.id ? "Confirm: delete from Vintly" : posted2 ? "Remove from Vintly" : "Delete item"}</button>
       ${posted2 ? `<p class="note center">Removing it here doesn't touch the listing on Vinted.</p>` : ""}
     </div>`;
-    el.scrollTop = keep;
-    // A new error: bring it into view (you were probably down at the Post button)
-    const ek = x.err && !x.busy ? x.id + "|" + x.err : "";
-    if (ek && ek !== lastErr) { const eb = el.querySelector(".errbox"); if (eb) eb.scrollIntoView({ block: "center" }); }   // at once: a smooth scroll would be cut short by the next re-render
-    lastErr = ek;
+    el.scrollTop = keep;   // the sheet never scrolls by itself: progress and errors appear where you tapped
   }
+  const startBusy = (kind, t) => ({ kind, steps: [{ t, done: false }], p: 0.02, t0: Date.now(), ph: [], phase: "" });   // shown at once, until Scriptable's own steps arrive
   const clip2 = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
   // ---- Settings (app-blueprints · settings) ----
@@ -3010,8 +3192,9 @@ function clientApp() {
         x.listing.colorIds = ids; renderItem(); send("field", { id: openId, k: "colorIds", v: ids }); break;
       }
       case "parcel": if (x) { x.listing.packageSizeId = +v; renderItem(); send("field", { id: openId, k: "packageSizeId", v: +v }); } break;
-      case "post": if (armed === "post" + openId) { armed = null; send("post", { id: openId }); renderItem(); } else arm2("post" + openId, renderItem); break;
-      case "draft": send("post", { id: openId, draft: true }); break;
+      case "post": if (armed === "post" + openId) { armed = null; if (x) x.busy = startBusy("post", "Starting"); send("post", { id: openId }); renderItem(); render(); } else arm2("post" + openId, renderItem); break;
+      case "draft": if (x) x.busy = startBusy("draft", "Starting"); send("post", { id: openId, draft: true }); renderItem(); render(); break;
+      case "aifix": { const y = byId(v || openId); if (!y || y.busy) break; y.busy = startBusy("fix", "✦ Working out what went wrong"); send("aifix", { id: y.id }); renderItem(); render(); break; }
       case "cprep": { const y = byId(v); if (y) { y.queued = true; render(); } send("prepq", { id: v }); break; }
       case "prepall": send("prepall", {}); break;
       case "prepstop": send("prepstop", {}); break;
@@ -3033,7 +3216,7 @@ function clientApp() {
           const c2 = posting[id]; if (!c2) return;
           if (--c2.left > 0) return render();
           clearInterval(c2.t); delete posting[id];
-          const z = byId(id); if (z) z.busy = { steps: [{ t: "Posting on Vinted", done: false }], p: 0.02, t0: Date.now(), ph: [], phase: "" };
+          const z = byId(id); if (z) z.busy = startBusy("post", "Posting on Vinted");
           send("post", { id }); render();
         }, 1000) };
         render(); break;
@@ -3044,7 +3227,6 @@ function clientApp() {
       case "specs": send("specs", { id: openId }); break;
       case "specsadd": send("specsadd", { id: openId }); break;
       case "specsrc": send("specsrc", { id: openId, v }); break;
-      case "toerr": { const eb = $("#itemsheet .errbox"); if (eb) eb.scrollIntoView({ block: "center", behavior: "smooth" }); break; }
       case "acctrefresh": send("acctrefresh", { v }); break;
       case "vopen": vOpen = +v; armed = null; renderVItem(); $("#vsheet").scrollTop = 0; break;
       case "vclose": vOpen = null; renderVItem(); break;
@@ -3245,6 +3427,18 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .prepbar{display:flex;flex-direction:column;gap:6px;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:11px 13px;margin:0 0 12px}
 .pb-h{display:flex;align-items:center;gap:8px}.pb-h b{flex:1;font-size:calc(14.5px * var(--ts))}
 .pbar.mini.wide{max-width:none;margin:2px 0 0}
+.progbtn{position:relative;display:flex;align-items:center;gap:10px;width:100%;height:50px;margin:8px 0;padding:0 14px;border-radius:10px;overflow:hidden;background:var(--signal-wash);border:1px solid var(--signal)}
+.progbtn .pg-fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#0FA19255,#2DD4BF77);transition:width .6s ease}
+.progbtn .pg-t{position:relative;flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-weight:600;font-size:calc(14.5px * var(--ts))}
+.progbtn .pg-now{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.progbtn .pg-p{position:relative;flex:none;font:700 calc(14px * var(--ts))/1 var(--num)}
+.fixbtn{margin:10px 0 2px}
+.pc-aifix{align-self:flex-start}
+.fixnote{display:flex;flex-direction:column;gap:3px;background:var(--signal-wash);border-radius:12px;padding:10px 12px;margin:8px 0}
+.fixnote span{font-size:calc(13.5px * var(--ts));font-weight:600}
+.pc-iss li.good{background:var(--signal-wash);color:var(--ink)}
+.eb-wait{display:flex;align-items:center;gap:8px}
+.eb-raw{font-size:calc(12.5px * var(--ts));color:var(--ink-2);margin:6px 0}
 .prepsum{display:flex;gap:14px;flex-wrap:wrap;font-size:calc(13px * var(--ts));font-weight:600;margin:0 2px 10px}
 .pb-ok{color:var(--signal)} .pb-bad{color:var(--amber)}
 .empty{text-align:center;padding:30px 12px}
@@ -3464,7 +3658,6 @@ textarea.fin{resize:vertical}
 #ptr.busy .ptr-ico{border:2px solid var(--rule);border-top-color:var(--signal);color:transparent;animation:ptrSpin .7s linear infinite}
 @keyframes ptrSpin{to{transform:rotate(360deg)}}
 /* A refused request, in full */
-.err-jump{display:block;width:100%;margin:10px 0 8px;text-align:left;background:var(--amber-wash);color:var(--danger);border:1px solid rgba(251,191,36,.45);border-radius:12px;padding:10px 12px;font:inherit;font-weight:600;font-size:calc(14px * var(--ts))}
 .errbox{margin:12px 0 0;background:var(--amber-wash);border:1px solid rgba(251,191,36,.45);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;color:var(--ink)}
 .errbox>b{color:var(--danger);font-size:calc(15px * var(--ts))}
 .errbox p{margin:0;font-size:calc(13.5px * var(--ts))}
@@ -4015,6 +4208,8 @@ async function bootApp(isClosed) {
       await addPhotos(list, "", "share").catch(e => toast(String(e.message || e)));
     }
     if (Date.now() - (settings.vintedAt || 0) > 6 * 3600e3 || !settings.vintedOk || !settings.vintedUser) { await vintedCheck(); if (!isClosed()) push(); }
+    // Errors from before (or whose explanation was cut short) get their plain words now, one at a time
+    (async () => { for (const x of items.filter(y => wantsExplain(y) && (!y.errAI || y.errAI.pending)).slice(0, 10)) { if (isClosed()) break; await explainErr(x); } })().catch(() => {});
     const waiting = items.filter(x => x.queued && x.status !== "posted").map(x => x.id);   // a line cut short last time
     if (waiting.length && !isClosed()) { items.forEach(x => { x.queued = false; }); if (aiKey()) queuePrepare(waiting); else write("items", items); }
     // Your messages and listings, fresh on every open; then the unread count again every few minutes while Vintly is open

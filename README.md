@@ -104,6 +104,7 @@ What else you need:
 | Add items | Tap **Take photos** or **Choose photos**; take a few photos of each thing. Or share photos to Vintly from Photos |
 | Fix the sorting | Tap a photo, then the item it belongs to (or **+ A new item**). **All one item** and **One item per photo** do it in one go. Tap **Add … items** |
 | Get listings for a pile | After **Add … items**, each item is prepared in turn (the bar above the list shows how far; **Stop** ends the line). **✦ Prepare all** prepares items that weren't. Turn it off in Settings › AI settings › Prepare new items right away |
+| Fix an error | Errors are in plain words, on the card and by the button that failed. Tap **✦ Fix with AI**: AI changes what Vinted didn't accept (or fills what's missing) and lists the changes; then post again. Vinted's own answer is under **Details** |
 | Post from the list | A ready card (✓) has the price with **−** and **+** (or type it) and **Post**; tap **Undo** within 3 seconds to stop it. A card with ⚠ says what's wrong; **Fix ›** opens it |
 | Get a listing | Open an item, add notes if you know something the photos don't show (size, flaws, "never worn"), tap **Prepare**. Vintly cleans the photos, writes the listing, fills Vinted's fields and sets a price |
 | Get the technical details | They're looked up while preparing and added at the end of the description. On the item, **Look up again** repeats it, **Add to the description** puts them in a description you wrote yourself, and the sources open in Safari |

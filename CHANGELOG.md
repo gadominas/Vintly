@@ -2,6 +2,25 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.7.0 (2026-11-08): Errors you can read, and fix with one tap
+
+- 🛠️ **Fix with AI**: One tap sends the error to AI, which changes what Vinted didn't accept; then post again.
+- 💬 **Errors in plain words**: Every error says what went wrong and what would fix it; Vinted's own answer waits under Details.
+- 📍 **Progress where you tap**: Posting fills the Post button itself; the screen never jumps or scrolls.
+
+**Changes**
+
+- Posting, saving a draft and fixing show their progress in place of their own button: one line and a bar, always the same height; the growing step list at the top of the item is gone for them, and preparing's list shows its last four steps
+- Errors show next to the button that failed (Post errors above Post, now Post again) and the sheet no longer scrolls to them
+- ✦ AI writes every error in plain words (title and one or two sentences) on the card and in the item, and says whether changing the listing could fix it; errors saved earlier are explained when Vintly opens
+- ✦ Fix with AI, in the error and on the card (also for fields still needed): the error, Vinted's answer, the listing and every choice Vinted offers go to the AI, which changes title, description, price, category, brand, condition, size and other fields, colours or parcel; each change is checked against Vinted's lists, a new category gets a second round for its fields, and what changed is listed (✦ Fixed by …)
+- Settings › AI settings › Token usage counts Explaining and fixing errors on its own
+- Tests: tests/cases/02-errors-fix.test.js
+
+**Fixes**
+
+- Parcel sizes came in French (Petit, Moyen, Grand): they're now asked for in the Vinted site's language. Items prepared before keep the old names until prepared again or their category changes
+
 ## 1.6.0 (2026-11-08): Snap a pile, post from the list
 
 - ⚡ **Prepared one by one**: Add photos of several items and each is prepared in turn, while you carry on.
