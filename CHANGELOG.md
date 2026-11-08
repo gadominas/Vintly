@@ -2,6 +2,20 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.9.1 (2026-11-08): Sorting that doesn't trip
+
+
+**Changes**
+
+- Every AI answer is read forgivingly: JSON inside other text (even text with braces of its own), keys without quotes, 'single quotes', comments, trailing commas, curly quotes, and answers cut off at the end
+- Sorting photos: more room for the answer with many photos, OpenAI's JSON mode, one more try when an answer can't be read, and the answer written to the start log for help
+- Listings from photos also ask OpenAI for JSON only
+- Tests: tests/cases/05-sort-reply.test.js
+
+**Fixes**
+
+- Sorting several photos could fail with "JSON Parse error: Property name must be a string literal" when AI wrote a sentence with braces before its answer; when it still can't sort, it now says so in plain words
+
 ## 1.9.0 (2026-11-08): See every photo large
 
 - 🔍 **Photos, large**: Tap any photo you took to see it full screen; swipe through the rest.

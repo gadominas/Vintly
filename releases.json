@@ -4,6 +4,21 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.9.1",
+      "date": "2026-11-08",
+      "title": "Sorting that doesn't trip",
+      "highlights": [],
+      "changes": [
+        "Every AI answer is read forgivingly: JSON inside other text (even text with braces of its own), keys without quotes, 'single quotes', comments, trailing commas, curly quotes, and answers cut off at the end",
+        "Sorting photos: more room for the answer with many photos, OpenAI's JSON mode, one more try when an answer can't be read, and the answer written to the start log for help",
+        "Listings from photos also ask OpenAI for JSON only",
+        "Tests: tests/cases/05-sort-reply.test.js"
+      ],
+      "fixes": [
+        "Sorting several photos could fail with \"JSON Parse error: Property name must be a string literal\" when AI wrote a sentence with braces before its answer; when it still can't sort, it now says so in plain words"
+      ]
+    },
+    {
       "version": "1.9.0",
       "date": "2026-11-08",
       "title": "See every photo large",

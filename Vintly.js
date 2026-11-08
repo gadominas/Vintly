@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -464,7 +464,7 @@ async function aiCall(system, user, maxTokens = 2500, feature = "other", provide
   const anUser = images.length ? images.map(d => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } })).concat([{ type: "text", text: user }]) : user;
   if (openai) {
     r.headers = { "Authorization": "Bearer " + key, "Content-Type": "application/json" };
-    r.body = JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: oaUser }] });
+    r.body = JSON.stringify(Object.assign({ model, messages: [{ role: "system", content: system }, { role: "user", content: oaUser }] }, opts.json ? { response_format: { type: "json_object" } } : {}));
   } else {
     r.headers = { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" };
     r.body = JSON.stringify({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: anUser }] });
@@ -475,6 +475,7 @@ async function aiCall(system, user, maxTokens = 2500, feature = "other", provide
   recordUsage(provider, model, feature,
     openai ? (u.prompt_tokens || 0) : (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
     openai ? (u.completion_tokens || 0) : (u.output_tokens || 0));
+  aiCall.stop = openai ? ((j.choices && j.choices[0] && j.choices[0].finish_reason) || "") : (j.stop_reason || "");   // "max_tokens" / "length": the answer was cut off
   return openai ? ((j.choices && j.choices[0] && j.choices[0].message.content) || "")
                 : (j.content || []).map(c => c.text || "").join("");
 }
@@ -531,10 +532,68 @@ async function aiSearchCall(system, user, maxTokens, feature, provider, images, 
 }
 
 // For prompts that ask for JSON: tolerate code fences and stray text around it.
-function parseJSON(txt) {
-  const s = String(txt).replace(/```json|```/g, "").trim();
-  const a = s.search(/[\[{]/), b = Math.max(s.lastIndexOf("}"), s.lastIndexOf("]"));
-  return JSON.parse(s.slice(a, b + 1));
+// AI's answer as JSON, read forgivingly: the JSON may sit inside other text (which may hold braces of its own), use
+// JavaScript habits (unquoted keys, 'single quotes', comments, trailing commas, curly quotes), or be cut off at the
+// end. With key, the object that holds that key wins.
+function parseJSON(txt, key) {
+  const s = String(txt == null ? "" : txt).replace(/```(?:json)?/gi, "").trim();
+  const tryJ = t => { try { const j = JSON.parse(t); return j && typeof j === "object" ? j : null; } catch (e) { return null; } };
+  const fits = j => !key || (!Array.isArray(j) && key in j);
+  let j = tryJ(s) || tryJ(repairJSON(s));
+  if (j && fits(j)) return j;
+  let best = j;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "{" && s[i] !== "[") continue;
+    const e = closeOf(s, i); if (e < 0) continue;
+    const c = s.slice(i, e + 1), k = tryJ(c) || tryJ(repairJSON(c));
+    if (!k) continue;
+    if (fits(k)) return k;
+    if (!best || JSON.stringify(k).length > JSON.stringify(best).length) best = k;
+  }
+  const start = s.search(key ? new RegExp(`[{]\\s*["']?${key}`) : /[{[]/), cut = start >= 0 ? tryJ(repairJSON(closeCut(s.slice(start)))) : null;   // an answer cut off at the end
+  if (cut && fits(cut)) return cut;
+  if (best) return best;
+  throw new Error("AI's answer couldn't be read" + (key ? ` (no "${key}" in it)` : ""));
+}
+function closeOf(s, i) {   // where the {…} or […] starting at i ends, minding strings
+  const stack = []; let q = "";
+  for (let k = i; k < s.length; k++) {
+    const ch = s[k];
+    if (q) { if (ch === "\\") k++; else if (ch === q) q = ""; continue; }
+    if (ch === '"' || ch === "'") q = ch;
+    else if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
+    else if (ch === "}" || ch === "]") { if (stack.pop() !== ch) return -1; if (!stack.length) return k; }
+  }
+  return -1;
+}
+function closeCut(s) {   // closes the strings, objects and arrays left open where the text stops
+  const stack = []; let q = "";
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (q) { if (ch === "\\") k++; else if (ch === q) q = ""; continue; }
+    if (ch === '"') q = ch; else if (ch === "{") stack.push("}"); else if (ch === "[") stack.push("]"); else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let t = q ? s + q : s;
+  t = t.replace(/,\s*("[^"]*"\s*:?\s*)?$/, "").replace(/:\s*$/, ": null");
+  return t + stack.reverse().join("");
+}
+function repairJSON(s) {   // outside strings: comments out, keys quoted, 'strings' in double quotes, trailing commas out
+  s = String(s).replace(/[“”„]/g, '"');
+  let out = "", i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '"' || ch === "'") {
+      let k = i + 1, body = "";
+      for (; k < s.length && s[k] !== ch; k++) { if (s[k] === "\\") { body += s[k] + (s[k + 1] || ""); k++; } else body += ch === "'" && s[k] === '"' ? '\\"' : s[k]; }
+      out += '"' + body + '"'; i = k + 1; continue;
+    }
+    if (ch === "/" && s[i + 1] === "/") { while (i < s.length && s[i] !== "\n") i++; continue; }
+    if (ch === "/" && s[i + 1] === "*") { const e = s.indexOf("*/", i + 2); i = e < 0 ? s.length : e + 2; continue; }
+    const m = /^[A-Za-z_$][\w$-]*(?=\s*:)/.exec(s.slice(i, i + 64));
+    if (m && /[{,]\s*$/.test(out)) { out += '"' + m[0] + '"'; i += m[0].length; continue; }
+    out += ch; i++;
+  }
+  return out.replace(/,(\s*[}\]])/g, "$1");
 }
 
 // Photo cleanup: one image edit with OpenAI's image model (Claude has no image output). It answers with a PNG
@@ -1106,18 +1165,29 @@ async function sortBatch() {
     const ph = batch.photos.slice(0, 24);
     const imgs = [];
     for (const p of ph) imgs.push(await readB64(photoFile(BATCH, p.id, "t")));
-    const txt = await aiCall(
-      "You sort photos into items for second-hand listings. Several photos usually show the same item from different sides; labels, backs and close-ups belong to the item they show. Reply with JSON only.",
+    const ask = () => aiCall(
+      "You sort photos into items for second-hand listings. Several photos usually show the same item from different sides; labels, backs and close-ups belong to the item they show. Reply with one JSON object and nothing else: no text before or after it.",
       `There are ${ph.length} photos, numbered 1 to ${ph.length} in the order given. Group them by the physical item they show. ` +
-      `Reply as {"groups":[[1,2,3],[4,5]],"names":["short English name of item 1","…"]}. Every photo number appears exactly once.`,
-      800, "sort", settings.aiProvider, imgs);
-    const j = parseJSON(txt), seen = new Set();
-    const groups = (j.groups || []).map(g => g.map(n => ph[n - 1] && ph[n - 1].id).filter(id => id && !seen.has(id) && seen.add(id))).filter(g => g.length);
+      `Reply exactly as {"groups":[[1,2,3],[4,5]],"names":["short English name of item 1","…"]} with plain numbers in the groups. Every photo number appears exactly once.`,
+      400 + ph.length * 60, "sort", settings.aiProvider, imgs, { json: true });
+    let j = null, txt = "";
+    for (let tries = 0; tries < 2 && !j; tries++) {   // a reply that can't be read is asked for once more
+      txt = await ask();
+      try { j = parseJSON(txt, "groups"); if (!Array.isArray(j.groups)) throw new Error("no groups"); }
+      catch (e) { j = null; startLog(`sort: answer not readable (${aiCall.stop || "?"}): ${clip(txt, 400)}`); }
+    }
+    if (!j) throw new Error("AI's answer couldn't be read");
+    const seen = new Set();
+    const groups = (j.groups || []).map(g => [].concat(g).map(n => parseInt(n, 10)).map(n => ph[n - 1] && ph[n - 1].id).filter(id => id && !seen.has(id) && seen.add(id))).filter(g => g.length);
     const rest = batch.photos.map(p => p.id).filter(id => !seen.has(id));
     if (rest.length) groups.push(rest);
     if (groups.length) { batch.groups = groups; batch.names = (j.names || []).map(s => clip(s, 40)); batch.by = PROVIDERS[settings.aiProvider]; }
     track("items_sorted", { photos: batch.photos.length, items: batch.groups.length, provider: settings.aiProvider });
-  } catch (e) { toast("Couldn't sort the photos: " + String(e.message || e).slice(0, 80)); }
+  } catch (e) {
+    startLog("sort: " + (e.message || e));
+    toast(/couldn't be read/.test(String(e.message)) ? "✦ AI couldn't sort these photos this time. Tap ✦ Sort with AI to try again, or move the photos yourself."
+      : "Couldn't sort the photos: " + String(e.message || e).slice(0, 80));
+  }
   if (batch) batch.sorting = false;
   push();
 }
@@ -1231,8 +1301,8 @@ async function analyse(it) {
   const colors = (vCacheGet().colors || []).map(c => c.code).filter(Boolean).join(", ") || "BLACK, GREY, WHITE, CREAM, BEIGE, BROWN, RED, PINK, ORANGE, YELLOW, GREEN, BLUE, NAVY, PURPLE, GOLD, SILVER, MULTI";
   const p = listingPrompt(colors);
   const scan = scanBarcode(it, n).catch(e => { startLog("barcode scan: " + (e.message || e)); return null; });   // the page reads the stripes while AI reads the photos
-  const txt = await aiCall(p.system, p.user + (it.notes ? `\n\nThe seller adds: ${clip(it.notes, 600)}` : "") + (it.hint ? `\nIt was sorted as: ${it.hint}` : ""), 2500, "listing", settings.aiProvider, imgs);
-  const j = parseJSON(txt);
+  const txt = await aiCall(p.system, p.user + (it.notes ? `\n\nThe seller adds: ${clip(it.notes, 600)}` : "") + (it.hint ? `\nIt was sorted as: ${it.hint}` : ""), 2500, "listing", settings.aiProvider, imgs, { json: true });
+  const j = parseJSON(txt, "title");
   it.ai = { at: Date.now(), by: PROVIDERS[settings.aiProvider], what: clip(j.what, 80), brand: clip(j.brand, 60), model: clip(j.model, 60),
     words: (j.category_words || []).map(w => clip(w, 60)).slice(0, 6), condition: CONDITIONS.some(c => c.code === j.condition) ? j.condition : "good",
     flaws: (j.flaws || []).map(f => clip(f, 120)).slice(0, 6), colors: (j.colors || []).slice(0, 2).map(String), materials: (j.materials || []).slice(0, 4).map(String),
