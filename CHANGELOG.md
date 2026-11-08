@@ -2,6 +2,22 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.6.0 (2026-11-08): Snap a pile, post from the list
+
+- ⚡ **Prepared one by one**: Add photos of several items and each is prepared in turn, while you carry on.
+- ⚠️ **Problems in plain sight**: A card with something wrong shows a ⚠ sign and says what, before you open it.
+- ✅ **Price and post from the list**: Change the price with − and + and tap Post right on the card; Undo for 3 seconds.
+
+**Changes**
+
+- New items from a batch are prepared automatically, one at a time, in the order of the batch (Settings › AI settings › Prepare new items right away, on by default); the line is saved and carries on the next time Vintly opens
+- A bar above the list shows the line (how many done, which one now) with Stop; when nothing is running it offers ✦ Prepare all for items not prepared yet, and counts ready and needs-a-look items
+- Each card on To post shows its problems: Vinted's refusal or another error, the fields still needed, photos that couldn't be cleaned, and when ✦ AI wasn't sure; a ⚠ or ✓ sign on the photo and a coloured edge
+- Prepared cards have the price with − and + (by Settings › Pricing › Round prices to), typed prices are saved too, with Vinted's suggested range under it
+- Post on a card posts after a 3-second count with Undo; cards with something missing get Fix › instead, which opens the item; a failed prepare offers ✦ Try again
+- Items from a batch keep the batch's order on the list (Item 1 on top)
+- Tests: the first Vintly scenario, tests/cases/01-batch-list.test.js
+
 ## 1.5.0 (2026-11-07): Built with, explained
 
 - 🧩 **Know what's inside**: Tap any blueprint in Settings › Built with to see what it is, what it does, what it drives and why it matters.

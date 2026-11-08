@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -268,6 +268,7 @@ const settings = Object.assign(
     lang: "lt", lang2: "en", humour: true, bothTitles: true,            // Listings
     cleanStyle: "keep", removePhotosAfter: false, stickers: "all", qrBadge: true,   // stickers: all, kids (kids' items only), off                      // Photos: keep (the item's own pixels), studio (AI re-drawn), off
     ai: true, aiClean: true, aiSpecs: true,                                            // What AI does: sort new photos into items, clean photos
+    autoPrepare: true,                                                  // new items from a batch are prepared one by one, right away
     imageModel: "",                                                     // the OpenAI image model for cleaning ("" = IMAGE_MODEL)
     aiProvider: "anthropic",                                            // AI configuration
     checkUpdates: true,   // offer new versions from GitHub (asks again 2 days after "Later")
@@ -278,7 +279,7 @@ const settings = Object.assign(
 );
 const settingsOk = !loadIssues.includes("settings");   // settings that were never read are never saved over
 // Items are read in loadData(): the app shows its first screen before reading them, because iCloud can be slow.
-let items = [];   // [{ id, created, status: "new" | "ready" | "posted", photos: [{ id, w, h, clean, use }], ai, listing, opts, vinted, err }]
+let items = [];   // [{ id, created, status: "new" | "ready" | "posted", photos: [{ id, w, h, clean, use }], ai, listing, opts, vinted, err, queued }]
 async function loadData() {
   loadIssues.length = 0;   // loadRepaired is kept, so a damaged settings.json (read before this) still gets its toast
   items = await load("items", []);
@@ -1089,10 +1090,13 @@ function finishBatch(groups) {
     for (const pid of g.slice(0, cfg("maxPhotos"))) { const p = batch.photos.find(x => x.id === pid); if (p) { movePhoto(BATCH, it.id, pid); it.photos.push(p); } }
     made.push(it);
   });
+  items = made.concat(items.filter(x => !made.includes(x)));   // Item 1 on top, as the groups were
   clearBatch();
   write("items", items); push();
+  const auto = settings.autoPrepare !== false && !!aiKey();
   if (made.length === 1) call("openItem", made[0].id);
-  else toast(`${made.length} items added. Open one to prepare it.`);
+  else toast(auto ? `${made.length} items added. ✦ Preparing them one by one…` : `${made.length} items added. Open one to prepare it.`);
+  if (auto) queuePrepare(made.map(x => x.id));
 }
 
 // ---------- ✦ cleaning photos ----------
@@ -1472,6 +1476,59 @@ async function postItem(id, asDraft) {
   write("items", items); push(); saveWidget(widgetSnapshot());
 }
 
+// ---------- preparing a batch, one item at a time ----------
+// Items wait in line (it.queued, saved, so a line cut short by closing Vintly carries on next time) and are prepared
+// one after another: one AI and image job at a time keeps within rate limits and shows a steady bar on each card.
+let prepQueue = [], prepRunning = false, prepCur = "", prepRun = null;   // prepRun: { ids, done } for the bar and the summary
+function prepView() { return { queue: prepQueue.slice(), running: prepRunning, cur: prepCur, total: prepRun ? prepRun.ids.length : 0, done: prepRun ? prepRun.done : 0 }; }
+function queuePrepare(ids) {
+  if (!aiKey()) { toast("Add a Claude or OpenAI key in Settings › AI settings"); return; }
+  let n = 0;
+  for (const id of ids) {
+    const it = byId(id);
+    if (!it || it.status === "posted" || busy[id] || prepQueue.includes(id) || prepCur === id) continue;
+    it.queued = true; prepQueue.push(id); n++;
+    if (!prepRun) prepRun = { ids: [], done: 0 };
+    prepRun.ids.push(id);
+  }
+  if (!n) return;
+  write("items", items); push();
+  runPrepQueue();
+}
+function unqueue(id) {
+  const it = byId(id);
+  if (it) it.queued = false;
+  prepQueue = prepQueue.filter(x => x !== id);
+  if (prepRun && prepRun.ids.includes(id) && prepCur !== id) { prepRun.ids = prepRun.ids.filter(x => x !== id); }
+}
+function stopPrepQueue() {
+  for (const id of prepQueue.slice()) unqueue(id);
+  write("items", items); push();
+}
+async function runPrepQueue() {
+  if (prepRunning) return;
+  prepRunning = true;
+  const t0 = Date.now();
+  while (prepQueue.length) {
+    const id = prepQueue.shift(), it = byId(id);
+    if (!it || !it.queued) { if (prepRun) prepRun.done++; continue; }
+    it.queued = false; prepCur = id;
+    write("items", items); push();
+    try { await prepare(id); } catch (e) { startLog("queue: " + (e.message || e)); }
+    prepCur = "";
+    if (prepRun) prepRun.done++;
+    push();
+  }
+  prepRunning = false;
+  const run = prepRun; prepRun = null;
+  push();
+  if (run && run.ids.length > 1) {
+    const done = run.ids.map(byId).filter(Boolean), ok = done.filter(x => !x.err && !missingFor(x).length).length, look = done.length - ok;
+    toast(`✦ ${done.length} items prepared: ${ok} ready to post${look ? `, ${look} need${look === 1 ? "s" : ""} a look` : ""}`);
+    track("batch_prepared", { items: done.length, ready: ok, look, seconds: Math.round((Date.now() - t0) / 1000) });
+  }
+}
+
 // ---------- in-app updates (app-blueprints · in-app-updates) ----------
 // Compares "1.10.0" and "1.9.2" as numbers: returns 1, 0 or -1.
 function cmpVer(a, b) {
@@ -1559,7 +1616,7 @@ function itemView(it) {
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
       t: posted && p !== it.photos[0] ? "" : p.gone ? "" : thumbURL(it.id, p.id, "t"), ct: !p.gone && p.clean && !posted ? thumbURL(it.id, p.id, "ct") : "" })),
-    missing: missingFor(it), busy: busy[it.id] || null,
+    missing: missingFor(it), busy: busy[it.id] || null, queued: !!it.queued,
   };
 }
 // Your Vinted account for the page: listings, conversations, the open conversation and what's loading.
@@ -1588,6 +1645,7 @@ async function refreshAccount(all, loud) {
 function clientState() {
   return {
     items: items.map(itemView),
+    prep: prepView(),
     batch: batch ? { photos: batch.photos.map(p => ({ id: p.id, t: thumbURL(BATCH, p.id, "t") })), groups: batch.groups, names: batch.names, sorting: !!batch.sorting, by: batch.by || "" } : null,
     colors: vCacheGet().colors || [], conditions: CONDITIONS,
     vinted: { ok: !!settings.vintedOk, at: settings.vintedAt || 0, site: siteOf(), cur: currencyOf(), base: vBase() },
@@ -1605,7 +1663,7 @@ function clientState() {
     settings: {
       tab: settings.tab, vintedSite: siteOf(), lang: settings.lang, lang2: settings.lang2, humour: settings.humour !== false, bothTitles: settings.bothTitles !== false,
       cleanStyle: settings.cleanStyle || "keep", removePhotosAfter: !!settings.removePhotosAfter, stickers: settings.stickers || "all", qrBadge: settings.qrBadge !== false,
-      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiSpecs: settings.aiSpecs !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
+      ai: settings.ai !== false, aiClean: settings.aiClean !== false, aiSpecs: settings.aiSpecs !== false, autoPrepare: settings.autoPrepare !== false, aiProvider: settings.aiProvider, hasKey: !!aiKey(), canClean: canClean(),
       checkUpdates: settings.checkUpdates !== false, shareUsage: !!settings.shareUsage,
       theme: settings.theme, density: settings.density, font: settings.font, textSize: settings.textSize,
     },
@@ -1637,7 +1695,7 @@ async function evcOne(expr, ms) {
   try { return JSON.parse(out || "null"); } catch (e) { return null; }
 }
 
-const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "aiSpecs", "imageModel",
+const SET_KEYS = ["tab", "vintedSite", "lang", "lang2", "humour", "bothTitles", "cleanStyle", "removePhotosAfter", "stickers", "qrBadge", "ai", "aiClean", "aiSpecs", "autoPrepare", "imageModel",
   "theme", "density", "font", "textSize", "checkUpdates"];
 async function handle(m) {
   const it = m.id ? byId(m.id) : null;
@@ -1670,7 +1728,7 @@ async function handle(m) {
       settings[m.k] = m.v;
       write("settings", settings);
       if (m.k === "vintedSite") { settings.vintedOk = false; vwv = null; vCache = null; push(); await vintedCheck(); return push(); }
-      if (["ai", "aiClean", "aiSpecs", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
+      if (["ai", "aiClean", "aiSpecs", "autoPrepare", "imageModel", "cleanStyle", "stickers", "qrBadge"].includes(m.k)) return push();
       return;
     case "cfg": {
       if (m.k === "*") settings.cfg = {}; else setCfg(m.k, m.v);
@@ -1825,7 +1883,10 @@ async function handle(m) {
       it.photos = it.photos.filter(x => x.id !== m.pid);
       write("items", items); return push();
     }
-    case "prepare": return prepare(m.id, { reclean: !!m.reclean });
+    case "prepare": if (it && it.queued) { unqueue(it.id); write("items", items); } return prepare(m.id, { reclean: !!m.reclean });
+    case "prepq": return queuePrepare([m.id]);   // ✦ Prepare on a card: in line behind the others
+    case "prepall": return queuePrepare(items.filter(x => x.status !== "posted" && !x.ai && !busy[x.id] && x.photos.length).map(x => x.id));
+    case "prepstop": stopPrepQueue(); return toast(prepRunning ? "The rest are taken out of line; the one being prepared finishes" : "Stopped");
     case "clean": return prepare(m.id, { reclean: true, read: false });
     case "copyerr": {   // the whole error for a message to whoever helps you (or to fix it on Vinted)
       if (!it || !it.err) return;
@@ -1879,7 +1940,7 @@ async function handle(m) {
       delete busy[it.id]; write("items", items); return push();
     }
     case "specsadd": if (it && it.specs) { addSpecsToDescription(it); write("items", items); push(); toast("Added at the end of the description"); } return;
-    case "delitem": if (it) { removeItemFiles(it.id); items = items.filter(x => x !== it); write("items", items); push(); saveWidget(widgetSnapshot()); } return;
+    case "delitem": if (it) { unqueue(it.id); removeItemFiles(it.id); items = items.filter(x => x !== it); write("items", items); push(); saveWidget(widgetSnapshot()); } return;
   }
 }
 
@@ -1906,6 +1967,8 @@ function clientApp() {
   let openId = null, cfgOpen = false, cfgArmed = false, aiOpen = false, aiArmed = null, armed = null, batchOpen = !!S.batch;
   let importTarget = "", tray = 0, importing = 0, panel = null;   // panel: "cat" or "brand", open inside the item sheet
   let catRes = null, brandRes = null, brandQ = "", catQ = "";
+  const posting = {};   // item id → { left, t }: a Post tapped on a card goes after a short count, so it can be undone
+  let mainDirty = false;   // the list waits to redraw while you type a price on a card
   let bg = null, bgSig = "", bgPick = null;   // the batch's groups as you arrange them
   const aiLoading = new Set();
   const $ = s => document.querySelector(s);
@@ -1968,7 +2031,7 @@ function clientApp() {
       setTimeout(function () { if (!document.getElementById("aiinv")) showInvite(c); }, 600);
     })();
   };
-  window.canInvite = () => !importing && !tray && !Object.values(S.items).some(x => x.busy);   // not while photos come in or an item is being prepared
+  window.canInvite = () => !importing && !tray && !Object.values(S.items).some(x => x.busy || x.queued) && !Object.keys(posting).length;   // not while photos come in or an item is being prepared
   function escI(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); }
   function showInvite(c) {
     var el = document.createElement("div");
@@ -2366,11 +2429,12 @@ function clientApp() {
       .map(([k, l, n, hot]) => `<button class="${tab === k ? "on" : ""}" data-act="tab" data-v="${k}">${l} <span class="n ${hot && n ? "hot" : ""}">${n}</span></button>`).join("");
   }
   function statusOf(x) {
-    if (x.busy) return ["busy", "Working…"];
+    if (x.busy) return ["busy", (S.prep && S.prep.cur === x.id) || (x.busy.steps[0] && /✦|Cleaning/.test(x.busy.steps[0].t)) ? "✦ Preparing" : "Working…"];
+    if (x.queued) { const n = ((S.prep && S.prep.queue) || []).indexOf(x.id) + 1; return ["queue", n ? `✦ In line · ${n}` : "✦ In line"]; }
     if (x.status === "posted") return x.vinted && x.vinted.draft ? ["done", "Draft on Vinted"] : ["done", "On Vinted"];
     if (x.err) return ["warn", "Needs a look"];
     if (!x.missing.length) return ["ok", "Ready to post"];
-    if (x.ai) return ["ai", "✦ Prepared"];
+    if (x.ai) return ["warn", "Needs a look"];
     return ["new", x.photos.length + (x.photos.length === 1 ? " photo" : " photos")];
   }
   const thumb = p => p.use === "clean" && p.ct ? p.ct : p.t;
@@ -2382,6 +2446,57 @@ function clientApp() {
       <span class="c-b"><b class="c-t">${esc(title)}</b><small class="muted">${x.status === "posted" && x.vinted ? (x.vinted.draft ? "Saved " : "Posted ") + rel(x.vinted.at) : L.catalogPath ? esc(L.catalogPath.split(" › ").slice(-1)[0]) : "Added " + rel(x.created)}</small>
         <span class="chip st-${k}">${st}${x.busy ? " " + Math.round((x.busy.p || 0) * 100) + "%" : ""}</span>${x.busy ? `<span class="pbar mini"><i style="width:${Math.max(3, Math.round((x.busy.p || 0) * 100))}%"></i></span>` : ""}</span>
       <span class="c-p">${L.price ? money(L.price) : ""}</span></button>`;
+  }
+  // ---- an item to post: what's wrong with it, its price and a Post button, right on the list ----
+  function issuesOf(x) {
+    const out = [], L = x.listing || {};
+    if (x.busy || x.queued) return out;
+    const miss = x.missing.length && (x.ai || L.title) ? "Still needed: " + x.missing.join(", ") : "";
+    if (x.err && !(miss && /^Still needed/.test(x.err))) out.push(["bad", x.err]);
+    if (miss) out.push(["bad", miss]);
+    const nc = x.photos.filter(p => p.err && !p.clean).length;
+    if (nc) out.push(["soft", `${nc} photo${nc === 1 ? " wasn't" : "s weren't"} cleaned; the original${nc === 1 ? " is" : "s are"} used`]);
+    if (x.ai && x.ai.confidence && x.ai.confidence < 0.6) out.push(["soft", "✦ AI wasn't sure what this is; check the title and category"]);
+    return out;
+  }
+  function pcard(x) {
+    const L = x.listing || {}, [k, st] = statusOf(x), th = x.photos.filter(p => thumb(p)).slice(0, 3);
+    const title = L.title || (x.ai && x.ai.what) || x.hint || "New item", iss = issuesOf(x), bad = iss.some(i => i[0] === "bad");
+    const idle = !x.busy && !x.queued, prepared = !!(x.ai || L.title), ready = idle && prepared && !x.missing.length, cd = posting[x.id];
+    const P = x.opts && x.opts.price;
+    let row = "";
+    if (idle && prepared) row = `<div class="pc-row">
+        <div class="pc-price" role="group" aria-label="Price"><button class="pc-step" data-act="cprice" data-id="${x.id}" data-v="-1" aria-label="Lower the price">−</button>
+          <input class="cprice" data-id="${x.id}" value="${L.price || ""}" inputmode="decimal" placeholder="0" aria-label="Price"><b>${esc(S.vinted.cur)}</b>
+          <button class="pc-step" data-act="cprice" data-id="${x.id}" data-v="1" aria-label="Raise the price">+</button></div>
+        ${ready ? `<button class="primary pc-post ${cd ? "armed" : ""}" data-act="cpost" data-v="${x.id}" ${S.vinted.ok || cd ? "" : "disabled"}>${cd ? `Posting in ${cd.left} · Undo` : "Post"}</button>`
+          : `<button class="sm pc-fix" data-act="open" data-v="${x.id}">Fix ›</button>`}</div>
+      ${ready && !S.vinted.ok ? `<small class="pc-note">Sign in to Vinted to post</small>` : P && P.low ? `<small class="pc-note">Vinted suggests ${money(P.low)}–${money(P.high)}</small>` : ""}`;
+    else if (idle && S.settings.hasKey && x.photos.length) row = `<div class="pc-row"><small class="muted grow">${x.err ? "Preparing didn't finish" : "Not prepared yet"}</small><button class="sm" data-act="cprep" data-v="${x.id}">${x.err ? "✦ Try again" : "✦ Prepare"}</button></div>`;
+    return `<div class="card pc ${bad ? "bad" : ready ? "ready" : ""}">
+      <button class="pc-top" data-act="open" data-v="${x.id}">
+        <span class="thumbs">${th.length ? th.map(p => `<img src="${thumb(p)}" alt="">`).join("") : `<i class="noimg"></i>`}${x.photos.length > 3 ? `<em>+${x.photos.length - 3}</em>` : ""}
+          ${idle && bad ? `<i class="pc-flag bad" aria-label="Needs a look">!</i>` : ready ? `<i class="pc-flag ok" aria-label="Ready to post">✓</i>` : ""}</span>
+        <span class="c-b"><b class="c-t">${esc(title)}</b><small class="muted">${L.catalogPath ? esc(L.catalogPath.split(" › ").slice(-1)[0]) : "Added " + rel(x.created)}</small>
+          <span class="chip st-${k}">${st}${x.busy ? " " + Math.round((x.busy.p || 0) * 100) + "%" : ""}</span>${x.busy ? `<span class="pbar mini"><i style="width:${Math.max(3, Math.round((x.busy.p || 0) * 100))}%"></i></span><small class="muted pc-now">${esc((x.busy.steps[x.busy.steps.length - 1] || {}).t || "")}</small>` : ""}</span>
+        ${idle && prepared ? `<span class="pc-chev" aria-hidden="true">›</span>` : `<span class="c-p">${L.price ? money(L.price) : ""}</span>`}</button>
+      ${iss.length ? `<ul class="pc-iss">${iss.map(([lv, t]) => `<li class="${lv}"><span aria-hidden="true">${lv === "bad" ? "⚠️" : "ℹ️"}</span><span>${esc(t.length > 160 ? t.slice(0, 159) + "…" : t)}</span></li>`).join("")}</ul>` : ""}
+      ${row}</div>`;
+  }
+  // Above the list: the line being prepared, or what's left to prepare, and how many are ready
+  function prepBar(list) {
+    const R = S.prep || {}, active = R.running || (R.queue || []).length;
+    if (active && R.total) {
+      const cur = R.cur && byId(R.cur), p = Math.min(1, ((R.done || 0) + (cur && cur.busy ? cur.busy.p || 0 : 0)) / R.total);
+      return `<div class="prepbar"><div class="pb-h"><span class="busy-dot"></span><b>✦ Preparing ${R.total} item${R.total === 1 ? "" : "s"}, one by one</b><button class="sm" data-act="prepstop">Stop</button></div>
+        <span class="pbar mini wide"><i style="width:${Math.max(3, Math.round(p * 100))}%"></i></span><small class="muted">${R.done || 0} of ${R.total} done${cur ? " · now: " + esc(clip2((cur.listing || {}).title || cur.hint || "an item", 34)) : ""}</small></div>`;
+    }
+    const fresh = list.filter(x => !x.ai && !x.busy && !x.queued && x.photos.length && !(x.listing || {}).title);
+    const ok = list.filter(x => !x.busy && !x.queued && !x.err && (x.ai || (x.listing || {}).title) && !x.missing.length).length;
+    const look = list.filter(x => !x.busy && !x.queued && (x.err || ((x.ai || (x.listing || {}).title) && x.missing.length))).length;
+    const parts = [ok ? `<span class="pb-ok">✓ ${ok} ready to post</span>` : "", look ? `<span class="pb-bad">⚠️ ${look} need${look === 1 ? "s" : ""} a look</span>` : ""].filter(Boolean);
+    if (fresh.length > 1 && S.settings.hasKey) return `<div class="prepbar"><div class="pb-h"><b>${fresh.length} items not prepared yet</b><button class="sm primary" data-act="prepall">✦ Prepare all</button></div>${parts.length ? `<small>${parts.join(" · ")}</small>` : ""}</div>`;
+    return parts.length && list.length > 1 ? `<div class="prepsum">${parts.join("")}</div>` : "";
   }
   // ---- your Vinted account: listings and messages ----
   const signinBanner = what => `<div class="banner"><b>Sign in to Vinted</b><span>${what}</span><button class="sm primary" data-act="vsignin">Sign in</button></div>`;
@@ -2457,7 +2572,9 @@ function clientApp() {
   }
 
   function render() {
-    const main = $("#main");
+    const main = $("#main"), ae = document.activeElement;
+    if (ae && ae.classList && ae.classList.contains("cprice") && main.contains(ae)) { mainDirty = true; return; }   // never redraw under your typing
+    mainDirty = false;
     if (tab === "posted") return renderPosted(main);
     if (tab === "msgs") return renderMsgs(main);
     const list = todo();
@@ -2470,7 +2587,7 @@ function clientApp() {
         ${S.settings.hasKey ? "" : `<p class="note">Without an AI key you fill in the listing yourself. Add one in Settings › AI settings.</p>`}</div>`;
       return;
     }
-    main.innerHTML = `${signin}${add}<div class="cards">${list.map(card).join("")}</div>`;
+    main.innerHTML = `${signin}${add}${prepBar(list)}<div class="cards">${list.map(pcard).join("")}</div>`;
   }
   function renderTray() {
     const el = $("#tray");
@@ -2830,6 +2947,8 @@ function clientApp() {
       <h3 class="sec">What AI does</h3>
       <div class="srow"><div class="grow"><b>Sort new photos into items</b><small class="muted">When you add several photos at once; one request per batch. Off: they become one item, and you sort them.</small></div>
         <button class="switch ${S.settings.ai ? "on" : ""}" data-act="toggle" data-v="ai" aria-label="Sort new photos into items"></button></div>
+      <div class="srow"><div class="grow"><b>Prepare new items right away</b><small class="muted">When you add photos of several items, each is prepared in turn, one at a time, so you can check the prices and post from the list. Off: open each item and tap Prepare.</small></div>
+        <button class="switch ${S.settings.autoPrepare ? "on" : ""}" data-act="toggle" data-v="autoPrepare" aria-label="Prepare new items right away"></button></div>
       <div class="srow"><div class="grow"><b>Look up technical details on the web</b><small class="muted">Dimensions, weight, materials and specs for the exact product, added at the end of the description. Uses your provider's web search (a few searches per item, billed by the provider on top of tokens); a barcode or ISBN on the item is looked up in free product databases first.</small></div>
         <button class="switch ${S.settings.aiSpecs ? "on" : ""}" data-act="toggle" data-v="aiSpecs" aria-label="Look up technical details on the web"></button></div>
       <div class="srow"><div class="grow"><b>Clean photo backgrounds</b><small class="muted">${A.hasOpenAI ? "One OpenAI image request per photo, when you prepare an item." : "Needs an OpenAI key, even when Claude writes the listings."} The style is in Settings › Photos.</small></div>
@@ -2893,6 +3012,32 @@ function clientApp() {
       case "parcel": if (x) { x.listing.packageSizeId = +v; renderItem(); send("field", { id: openId, k: "packageSizeId", v: +v }); } break;
       case "post": if (armed === "post" + openId) { armed = null; send("post", { id: openId }); renderItem(); } else arm2("post" + openId, renderItem); break;
       case "draft": send("post", { id: openId, draft: true }); break;
+      case "cprep": { const y = byId(v); if (y) { y.queued = true; render(); } send("prepq", { id: v }); break; }
+      case "prepall": send("prepall", {}); break;
+      case "prepstop": send("prepstop", {}); break;
+      case "cprice": {   // − / + on a card: by the rounding step (Settings › Pricing)
+        const id = t.dataset.id, y = byId(id); if (!y) break;
+        const inp = document.querySelector(`.cprice[data-id="${id}"]`), step = +S.cfg.priceRound || 1;
+        const cur = parseFloat(String(inp && inp.value !== "" ? inp.value : y.listing.price || 0).replace(",", ".")) || 0;
+        const nv = Math.max(step, Number((Math.round((cur + step * +v) / step) * step).toFixed(2)));
+        y.listing.price = nv; y.listing.priceSet = true; if (inp) inp.value = nv;
+        send("field", { id, k: "price", v: String(nv) }); break;
+      }
+      case "cpost": {   // one tap posts after a 3-second count; a second tap in that time undoes it
+        const id = v, c = posting[id];
+        if (c) { clearInterval(c.t); delete posting[id]; render(); window.toast("Not posted"); break; }
+        const y = byId(id); if (!y || y.busy) break;
+        const inp = document.querySelector(`.cprice[data-id="${id}"]`);
+        if (inp && document.activeElement === inp) inp.blur();   // a price still being typed goes first
+        posting[id] = { left: 3, t: setInterval(() => {
+          const c2 = posting[id]; if (!c2) return;
+          if (--c2.left > 0) return render();
+          clearInterval(c2.t); delete posting[id];
+          const z = byId(id); if (z) z.busy = { steps: [{ t: "Posting on Vinted", done: false }], p: 0.02, t0: Date.now(), ph: [], phase: "" };
+          send("post", { id }); render();
+        }, 1000) };
+        render(); break;
+      }
       case "delitem": if (armed === "del" + openId) { armed = null; const id = openId; openId = null; send("delitem", { id }); renderItem(); } else arm2("del" + openId, renderItem); break;
       case "openvinted": send("openvinted", { v }); break;
       case "copyerr": send("copyerr", { id: openId }); break;
@@ -2970,6 +3115,7 @@ function clientApp() {
   });
   document.addEventListener("keydown", e => {
     if (e.key !== "Enter") return;
+    if (e.target.classList && e.target.classList.contains("cprice")) { e.preventDefault(); e.target.blur(); return; }
     if (e.target.id === "catq") { e.preventDefault(); catQ = e.target.value; if (catQ.trim()) send("catsearch", { id: openId, q: catQ }); e.target.blur(); }
     if (e.target.id === "brandq") { e.preventDefault(); brandQ = e.target.value; if (brandQ.trim()) send("brandsearch", { id: openId, q: brandQ }); e.target.blur(); }
   });
@@ -2983,6 +3129,12 @@ function clientApp() {
     if (el.id === "siteSel") { S.settings.vintedSite = el.value; send("set", { k: "vintedSite", v: el.value }); window.toast("Switching to " + el.value + "…"); return; }
     if (el.id === "langSel") { send("set", { k: "lang", v: el.value }); S.settings.lang = el.value; return; }
     if (el.id === "lang2Sel") { send("set", { k: "lang2", v: el.value }); S.settings.lang2 = el.value; return; }
+    if (el.classList && el.classList.contains("cprice")) {
+      const y = byId(el.dataset.id); if (!y) return;
+      const n = parseFloat(String(el.value).replace(",", ".").replace(/[^0-9.]/g, ""));
+      y.listing.price = n > 0 ? n : null; y.listing.priceSet = true;
+      send("field", { id: y.id, k: "price", v: el.value }); return;
+    }
     if (el.id === "imgsel") { send("set", { k: "imageModel", v: el.value }); window.toast("Photos are cleaned with " + el.value); return; }
     if (el.classList && el.classList.contains("fin") && x) {
       const k = el.dataset.k;
@@ -2997,6 +3149,7 @@ function clientApp() {
     }
   });
   // A field you left: the sheet may redraw now (it waits while you type)
+  document.addEventListener("focusout", e => { if (e.target.classList && e.target.classList.contains("cprice")) setTimeout(() => { if (mainDirty) render(); }, 250); });
   document.addEventListener("focusout", e => { if (e.target.closest && e.target.closest("#itemsheet")) setTimeout(() => { const ae = document.activeElement; if (!ae || !$("#itemsheet").contains(ae) || !/INPUT|TEXTAREA|SELECT/.test(ae.tagName)) renderItem(); }, 250); });
 
   applyLook();
@@ -3066,6 +3219,34 @@ main{padding:12px 14px 30px;max-width:720px;margin:0 auto}
 .chip.st-ok{color:var(--signal);background:var(--signal-wash)} .chip.st-ai{color:var(--signal);background:var(--signal-wash)}
 .chip.st-warn{color:var(--amber);background:var(--amber-wash)} .chip.st-busy{color:var(--ink);background:var(--amber-wash)} .chip.st-done{color:var(--muted)}
 body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
+.chip.st-queue{color:var(--ink-2);background:var(--paper);border:1px dashed var(--rule)}
+/* an item to post, on the list */
+.card.pc{flex-direction:column;align-items:stretch;gap:10px}
+.card.pc.bad{border-color:var(--amber);box-shadow:inset 3px 0 0 var(--amber)}
+.card.pc.ready{border-color:var(--signal);box-shadow:inset 3px 0 0 var(--signal)}
+.pc-top{display:flex;align-items:center;gap:12px;width:100%;text-align:left}
+.pc-chev{flex:none;font-size:calc(22px * var(--ts));color:var(--muted)}
+.pc-now{display:block}
+.pc-flag{position:absolute;left:-6px;top:-6px;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:800 13px/1 var(--num);font-style:normal;border:2px solid var(--sheet);z-index:1}
+.pc-flag.bad{background:var(--amber);color:#1a1300} .pc-flag.ok{background:var(--signal);color:var(--paper)}
+.pc-iss{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.pc-iss li{display:flex;gap:7px;align-items:flex-start;font-size:calc(13px * var(--ts));line-height:1.35;border-radius:9px;padding:7px 9px;background:var(--paper);color:var(--ink-2)}
+.pc-iss li.bad{background:var(--amber-wash);color:var(--ink)}
+.pc-row{display:flex;align-items:center;gap:10px}
+.pc-row .grow{flex:1}
+.pc-price{display:flex;align-items:center;gap:4px;flex:1;min-width:0;background:var(--paper);border:1px solid var(--rule);border-radius:11px;padding:3px}
+.pc-price input{flex:1;min-width:0;width:100%;border:0;background:none;color:var(--ink);text-align:right;font:700 calc(18px * var(--ts))/1 var(--num);padding:8px 2px;outline:none}
+.pc-price b{font-size:calc(12px * var(--ts));color:var(--muted);padding-right:4px}
+.pc-step{flex:none;width:40px;height:38px;border-radius:9px;background:var(--sheet);border:1px solid var(--rule);font-size:20px;font-weight:600;line-height:1}
+.pc-post{flex:none;min-width:104px;padding:12px 18px}
+.pc-post.armed{background:var(--amber);color:#1a1300}
+.pc-fix{flex:none;min-width:104px;padding:12px 14px;border-radius:10px;font-size:calc(15px * var(--ts));font-weight:600;text-align:center;border-color:var(--amber);color:var(--amber)}
+.pc-note{font-size:calc(12px * var(--ts));color:var(--muted);margin-top:-4px}
+.prepbar{display:flex;flex-direction:column;gap:6px;background:var(--sheet);border:1px solid var(--rule);border-radius:14px;padding:11px 13px;margin:0 0 12px}
+.pb-h{display:flex;align-items:center;gap:8px}.pb-h b{flex:1;font-size:calc(14.5px * var(--ts))}
+.pbar.mini.wide{max-width:none;margin:2px 0 0}
+.prepsum{display:flex;gap:14px;flex-wrap:wrap;font-size:calc(13px * var(--ts));font-weight:600;margin:0 2px 10px}
+.pb-ok{color:var(--signal)} .pb-bad{color:var(--amber)}
 .empty{text-align:center;padding:30px 12px}
 .empty.small{padding:30px 10px;color:var(--muted)}
 .empty h2{font:800 calc(24px * var(--ts))/1.2 var(--display);margin:14px 0 8px}
@@ -3834,6 +4015,8 @@ async function bootApp(isClosed) {
       await addPhotos(list, "", "share").catch(e => toast(String(e.message || e)));
     }
     if (Date.now() - (settings.vintedAt || 0) > 6 * 3600e3 || !settings.vintedOk || !settings.vintedUser) { await vintedCheck(); if (!isClosed()) push(); }
+    const waiting = items.filter(x => x.queued && x.status !== "posted").map(x => x.id);   // a line cut short last time
+    if (waiting.length && !isClosed()) { items.forEach(x => { x.queued = false; }); if (aiKey()) queuePrepare(waiting); else write("items", items); }
     // Your messages and listings, fresh on every open; then the unread count again every few minutes while Vintly is open
     if (!isClosed() && settings.vintedOk) await refreshAccount(true, false);
     const every = Timer.schedule(cfg("inboxEveryMin") * 60000, true, () => { if (isClosed()) every.invalidate(); else if (settings.vintedOk && !vLoading.inbox) refreshAccount(false, false); });

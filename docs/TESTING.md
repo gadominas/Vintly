@@ -10,6 +10,7 @@ With [app-blueprints](https://github.com/gadominas/app-blueprints) cloned next t
 (cd ../app-blueprints/testkit && npm ci)
 node ../app-blueprints/testkit/bin/run.js    # lint and the conformance packs: all must pass before a release
 node ../app-blueprints/testkit/bin/lint.js   # lint only
+node ../app-blueprints/testkit/bin/run.js -v 01   # one scenario, every step
 ```
 
 The same run happens on every push (`.github/workflows/tests.yml`). `tests/app.config.js` holds Vintly's per-app values.
@@ -21,7 +22,7 @@ The same run happens on every push (`.github/workflows/tests.yml`). `tests/app.c
 
 ## What it doesn't
 
-- No Vintly scenarios yet (`tests/cases` is empty): sorting photos, preparing and posting an item aren't checked by the testkit.
+- One Vintly scenario so far, `tests/cases/01-batch-list.test.js`: issues on each card, the price changed on the card, Post with Undo, Prepare all one by one. Sorting photos and a successful prepare or post aren't checked (no Vinted or AI fixtures yet).
 - Vinted, Claude, OpenAI and PostHog aren't faked: every request fails like a phone without a connection.
 - `tests/e2e.js` is an older end-to-end run in the Scriptable emulator (needs Playwright), with answers from `docs/site/scenario.js`: `node tests/e2e.js`.
 - Looks, light and dark mode, and anything only a real iPhone does: check those on the phone.
