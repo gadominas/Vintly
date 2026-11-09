@@ -2,7 +2,7 @@
 
 <div align="center">
 
-## Turn the pile you no longer need into money.
+### Turn the pile you no longer need into money.
 
 Photograph it. Check the price. Tap **Post**.<br>Vintly sorts the photos into items, cleans them, writes each listing, fills every Vinted field and suggests a fair price.
 
@@ -19,21 +19,15 @@ Photograph it. Check the price. Tap **Post**.<br>Vintly sorts the photos into it
 
 </div>
 
-## See it in action
-
 <p align="center">
-  <a href="docs/media/intro.mp4"><img src="docs/media/intro-preview.webp" width="300" alt="Vintly in 14 seconds: photos picked, sorted into items, prepared two at a time, priced, posted, and live on Vinted"></a>
-</p>
-<p align="center"><a href="docs/media/intro.mp4"><b>▶ Watch the full intro</b></a> (1 min 40 s, with sound). A real session: a pile of kids' shoes, from photos to live Vinted listings.</p>
-
-<p align="center">
+  <a href="docs/media/intro.mp4"><img src="docs/media/intro-card.webp" width="31%" alt="See it in action: a real session, sped up, from photos of kids' shoes to live Vinted listings"></a>
   <img src="docs/screenshots/01-list.png" width="31%" alt="Items to post, each with a photo, title and price">
-  <img src="docs/screenshots/02-sort.png" width="31%" alt="New photos sorted into three items">
   <img src="docs/screenshots/03-item.png" width="31%" alt="An item with cleaned photos, title and description">
 </p>
+<p align="center"><a href="docs/media/intro.mp4"><b>▶ Watch the full intro</b></a> (1 min 40 s, with sound)</p>
 
 > [!NOTE]
-> Screenshots are rendered from the app's real interface with invented sample data. The items and their photos are drawn, not photographed.
+> Screenshots are rendered from the app's real interface with invented sample data. The items and their photos are drawn, not photographed. The video is a real session.
 
 > [!IMPORTANT]
 > **Unofficial.** Not affiliated with, endorsed by or connected to Vinted. Vintly uses the same web requests as Vinted's own website, signed in as you, which Vinted's terms may not allow and which can change without notice. Use it with your own account and at your own risk. See [Disclaimer](#disclaimer).
@@ -57,27 +51,30 @@ Photograph it. Check the price. Tap **Post**.<br>Vintly sorts the photos into it
 ## Screenshots
 
 <p align="center">
+  <img src="docs/screenshots/02-sort.png" width="31%" alt="New photos sorted into three items">
   <img src="docs/screenshots/04-fields.png" width="31%" alt="Vinted fields: category, brand, size, condition, colours and parcel">
   <img src="docs/screenshots/05-vinted.png" width="31%" alt="Vinted sign-in">
-  <img src="docs/screenshots/06-post.png" width="31%" alt="Ready to post, with the price and the Post button">
 </p>
 <p align="center">
+  <img src="docs/screenshots/06-post.png" width="31%" alt="Ready to post, with the price and the Post button">
   <img src="docs/screenshots/07-posted.png" width="31%" alt="Your listings on Vinted with views, favourites, reserved and sold">
   <img src="docs/screenshots/08-empty.png" width="31%" alt="First open, with Take photos and Choose photos">
-  <img src="docs/screenshots/09-launch.png" width="31%" alt="Launch screen">
 </p>
 <p align="center">
+  <img src="docs/screenshots/09-launch.png" width="31%" alt="Launch screen">
   <img src="docs/screenshots/10-settings.png" width="31%" alt="Settings">
   <img src="docs/screenshots/11-ai-settings.png" width="31%" alt="AI settings with what AI does and the image model">
-  <img src="docs/screenshots/12-update.png" width="31%" alt="What's new sheet">
 </p>
 <p align="center">
+  <img src="docs/screenshots/12-update.png" width="31%" alt="What's new sheet">
   <img src="docs/screenshots/13-dark.png" width="31%" alt="Dark theme">
   <img src="docs/screenshots/15-messages.png" width="31%" alt="Messages tab with two unread conversations">
-  <img src="docs/screenshots/16-conversation.png" width="31%" alt="A conversation with a buyer and the reply box">
 </p>
 <p align="center">
+  <img src="docs/screenshots/16-conversation.png" width="31%" alt="A conversation with a buyer and the reply box">
   <img src="docs/screenshots/17-stickers.png" width="31%" alt="Preview of the photos with stickers and the Vintly QR code">
+</p>
+<p align="center">
   <img src="docs/screenshots/14-widget.png" width="62%" alt="Home Screen widget with unread Vinted messages">
 </p>
 
