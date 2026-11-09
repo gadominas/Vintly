@@ -2,6 +2,22 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.10.1 (2026-11-09): Lighter on memory, and back if the screen drops
+
+
+**Changes**
+
+- Thumbnails go to Vintly's screen once; every later update refers to them by key (an update went from about 1–1.4 MB, sent dozens of times while preparing, to about 15 KB)
+- If WebKit drops Vintly's screen (it does when memory runs low), Vintly notices within 15 s, builds the screen again and hands everything over, instead of leaving it empty or frozen
+- The detailed log notes when Vintly goes to the background and comes back, and leaves a "still open" mark after a quiet minute, so the time it stopped shows
+- A run that iOS ended while Vintly was in the background is no longer reported as "didn't close normally"
+- The barcode close-up read by AI is counted as Reading barcodes up close in Token usage (it showed as a second listing request)
+- Tests: tests/cases/07-page-state.test.js
+
+**Fixes**
+
+- Messages and your listings could fail to load just after opening ("Load failed") when the network wasn't up yet: they now try once more
+
 ## 1.10.0 (2026-11-08): A log to catch the crash
 
 - 📝 **Detailed log**: Every step, with times and sizes, saved on your iPhone so the moment before a crash is kept.

@@ -4,6 +4,23 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.10.1",
+      "date": "2026-11-09",
+      "title": "Lighter on memory, and back if the screen drops",
+      "highlights": [],
+      "changes": [
+        "Thumbnails go to Vintly's screen once; every later update refers to them by key (an update went from about 1–1.4 MB, sent dozens of times while preparing, to about 15 KB)",
+        "If WebKit drops Vintly's screen (it does when memory runs low), Vintly notices within 15 s, builds the screen again and hands everything over, instead of leaving it empty or frozen",
+        "The detailed log notes when Vintly goes to the background and comes back, and leaves a \"still open\" mark after a quiet minute, so the time it stopped shows",
+        "A run that iOS ended while Vintly was in the background is no longer reported as \"didn't close normally\"",
+        "The barcode close-up read by AI is counted as Reading barcodes up close in Token usage (it showed as a second listing request)",
+        "Tests: tests/cases/07-page-state.test.js"
+      ],
+      "fixes": [
+        "Messages and your listings could fail to load just after opening (\"Load failed\") when the network wasn't up yet: they now try once more"
+      ]
+    },
+    {
       "version": "1.10.0",
       "date": "2026-11-08",
       "title": "A log to catch the crash",

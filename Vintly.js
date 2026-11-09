@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -291,7 +291,8 @@ function traceStart() {
   try {
     if (lf.fileExists(TRACE_PATH)) {
       const old = lf.readString(TRACE_PATH);
-      if (/session started/.test(old) && !/session ended/.test(old.slice(-600)))
+      const tail = old.split("\n").filter(Boolean).slice(-3).join("\n");
+      if (/session started/.test(old) && !/session ended/.test(old.slice(-600)) && !/went to the background/.test(tail))   // ended by iOS in the background: not worth a note
         lastRun = { at: (old.match(/^(\d\d:\d\d:\d\d)/m) || [])[1] || "", last: old.split("\n").filter(Boolean).slice(-4).map(l => l.replace(/^\S+ \S+\s+/, "")).join("\n") };
       lf.writeString(TRACE_PREV, old);
     }
@@ -1433,7 +1434,7 @@ async function settleBarcode(it, scanned, j, n) {
       if (r && r.crop) {   // ✦ AI reads the digits off the close-up; kept only if the check digit is right
         const t = parseJSON(await aiCall("You read the number printed under a barcode, or an ISBN. Reply with JSON only.",
           `This is a close-up of a barcode on an item. Read every digit printed under or above the bars, left to right, exactly. Reply {"digits":"…"}, or {"digits":""} if you can't read all of them.`,
-          200, "listing", settings.aiProvider, [r.crop]));
+          200, "barcode", settings.aiProvider, [r.crop]));
         const d = String(t.digits || "").replace(/[^0-9X]/gi, "").toUpperCase();
         if (codeOk(d)) { A.barcode = d; A.barcodeVia = "ai-zoom"; return; }
       }
@@ -2019,10 +2020,10 @@ function itemView(it) {
   return {
     id: it.id, status: it.status, created: it.created, hint: it.hint || "", notes: it.notes || "", specs: it.specs || null, specsIn: !!(it.specs && it.listing && it.listing.specsBlock && String(it.listing.description || "").includes(it.listing.specsBlock)),
     err: it.err || "", errInfo: it.err && it.errInfo ? it.errInfo : null, errAI: it.err && it.errAI && (!it.errAI.pending || explaining.has(it.id)) ? it.errAI : null, errFrom: it.errFrom || "", fixNote: it.fixNote || null,
-    listing: it.listing || {}, ai: it.ai || null, vinted: it.vinted || null, cover: it.cover || "", fitAt: it.fitAt || 0,
+    listing: it.listing || {}, ai: it.ai || null, vinted: it.vinted || null, cover: ref(it.cover || ""), fitAt: it.fitAt || 0,
     opts: { cats: (it.opts && it.opts.cats) || [], attrs: (it.opts && it.opts.attrs) || [], parcels: (it.opts && it.opts.parcels) || PARCELS_FALLBACK, price: (it.opts && it.opts.price) || null },
     photos: it.photos.map(p => ({ id: p.id, clean: !!p.clean, use: p.use || "orig", studio: !!p.studio, err: p.cleanErr || "", gone: !!p.gone,
-      t: posted && p !== it.photos[0] ? "" : p.gone ? "" : thumbURL(it.id, p.id, "t"), ct: !p.gone && p.clean && !posted ? thumbURL(it.id, p.id, "ct") : "" })),
+      t: posted && p !== it.photos[0] ? "" : p.gone ? "" : ref(thumbURL(it.id, p.id, "t")), ct: !p.gone && p.clean && !posted ? ref(thumbURL(it.id, p.id, "ct")) : "" })),
     missing: missingFor(it), busy: busy[it.id] || null, queued: !!it.queued, postWait: postWaitOf(it.id),
   };
 }
@@ -2039,22 +2040,46 @@ async function refreshAccount(all, loud) {
   if (!settings.vintedOk) { if (loud) toast(`Sign in to ${siteOf()} first`); return; }
   vLoading.inbox = true; if (all) vLoading.wardrobe = true; push();
   try {   // a toast only for messages that came since the last check (the tab and the widget always show the count)
-    const was = vAccount(), before = was.unread || 0, seen = !!was.inboxAt, A = await vInbox();
+    const was = vAccount(), before = was.unread || 0, seen = !!was.inboxAt;
+    const A = await vInbox().catch(async e => { if (!/Load failed|network|offline/i.test(e.message || e)) throw e; await pause(2500); return vInbox(); });   // the network not up yet, just after opening
     if (seen && A.unread > before && !loud) toast(`💬 ${A.unread} unread message${A.unread === 1 ? "" : "s"} on Vinted`);
   }
   catch (e) { startLog("inbox: " + (e.message || e)); if (loud) toast(String(e.message || e)); }
   vLoading.inbox = false;
-  if (all) { try { await vWardrobe(); } catch (e) { startLog("wardrobe: " + (e.message || e)); if (loud) toast(String(e.message || e)); } vLoading.wardrobe = false; }
+  if (all) { try { await vWardrobe().catch(async e => { if (!/Load failed|network|offline/i.test(e.message || e)) throw e; await pause(2500); return vWardrobe(); }); } catch (e) { startLog("wardrobe: " + (e.message || e)); if (loud) toast(String(e.message || e)); } vLoading.wardrobe = false; }
   push();
   saveWidget(widgetSnapshot());
 }
 
+// Thumbnails go to the page once: the state carries "@key" in their place, and only thumbnails the page doesn't have
+// yet travel with it (st.refs). Before this every change sent every thumbnail again: about 1 MB for 19 items.
+const refKey = new Map(), refVal = new Map(), sentRefs = new Set();
+let refN = 0, refUsed = null;
+function ref(url) {
+  if (!url || !refUsed) return url || "";
+  let k = refKey.get(url);
+  if (!k) { k = (++refN).toString(36); refKey.set(url, k); refVal.set(k, url); }
+  refUsed.add(k);
+  return "@" + k;
+}
 function clientState() {
+  refUsed = new Set();
+  let st;
+  try { st = clientStateRaw(); } finally {
+    const used = refUsed; refUsed = null;
+    const refs = {};
+    for (const k of used) if (!sentRefs.has(k)) { refs[k] = refVal.get(k); sentRefs.add(k); }
+    for (const [k, url] of refVal) if (!used.has(k)) { refVal.delete(k); refKey.delete(url); sentRefs.delete(k); }   // gone from the page too
+    if (st) st.refs = refs;
+  }
+  return st;
+}
+function clientStateRaw() {
   return {
     items: items.map(itemView),
     prep: prepView(),
     lastRun: lastRun && !lastRunSeen ? lastRun : null,
-    batch: batch ? { photos: batch.photos.map(p => ({ id: p.id, t: thumbURL(BATCH, p.id, "t") })), groups: batch.groups, names: batch.names, sorting: !!batch.sorting, by: batch.by || "" } : null,
+    batch: batch ? { photos: batch.photos.map(p => ({ id: p.id, t: ref(thumbURL(BATCH, p.id, "t")) })), groups: batch.groups, names: batch.names, sorting: !!batch.sorting, by: batch.by || "" } : null,
     colors: vCacheGet().colors || [], conditions: CONDITIONS,
     vinted: { ok: !!settings.vintedOk, at: settings.vintedAt || 0, site: siteOf(), cur: currencyOf(), base: vBase() },
     vt: vtView(),
@@ -2087,8 +2112,9 @@ const safeJSON = x => JSON.stringify(x === undefined ? null : x).replace(/\u2028
 let wv = null;
 const call = (fn, ...args) => wv ? wv.evaluateJavaScript(`window.${fn} && window.${fn}(${args.map(safeJSON).join(",")});\n'ok'`, false).catch(() => {}) : Promise.resolve();
 const toast = msg => call("toast", msg);
-let pushN = 0, pushAt = 0;
+let pushN = 0, pushAt = 0, handing = false, pushLater = false;
 const push = () => {
+  if (handing) { pushLater = true; return Promise.resolve(); }   // the page isn't ready for updates yet: one comes right after
   const st = clientState();
   if (traceOn()) {   // how much goes to the page: the whole state (with thumbnails) on every change
     pushN++;
@@ -2429,7 +2455,7 @@ function clientApp() {
   const $ = s => document.querySelector(s);
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const PN = { anthropic: "Claude", openai: "OpenAI" };
-  const FEAT = { fix: "Explaining and fixing errors", listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", specs: "Technical details (web)", test: "Connection tests", other: "Other" };
+  const FEAT = { barcode: "Reading barcodes up close", fix: "Explaining and fixing errors", listing: "Listings from photos", vinted: "Vinted fields", sort: "Sorting photos into items", cleanup: "Photo cleanup", specs: "Technical details (web)", test: "Connection tests", other: "Other" };
   const byId = id => S.items.find(x => x.id === id);
 
   // ---- appearance (app-blueprints · settings, Step 3) ----
@@ -2534,7 +2560,7 @@ function clientApp() {
 
   // ---- bridge ← Scriptable ----
   window.recv = st => {
-    S = st; aiLoading.clear();
+    S = window.__resolve(st); aiLoading.clear();
     if (ptrAt && Date.now() - ptrAt > 300 && !((S.vt || {}).loading || {}).inbox && !((S.vt || {}).loading || {}).wardrobe && !ptrChecking) ptrDone();
     if (S.batch && !bg) batchOpen = true;
     if (!S.batch) { bg = null; bgSig = ""; batchOpen = false; }
@@ -4351,6 +4377,17 @@ window.__LOGO = ${safeJSON(LOGO_SVG)};
 window.__QR = ${safeJSON(QR_VINTLY)};
 // The page goes on screen first; Scriptable hands over the data once it has read it (recipe safe-startup).
 window.__parts = [];
+window.__refs = {};   // thumbnails by key: Scriptable sends each once (see ref())
+window.__resolve = function (st) {
+  var R = window.__refs, inc = st.refs || {}, used = {}, k;
+  for (k in inc) R[k] = inc[k];
+  delete st.refs;
+  function r(v) { if (typeof v === "string" && v.charAt(0) === "@") { used[v.slice(1)] = 1; return R[v.slice(1)] || ""; } return v; }
+  (st.items || []).forEach(function (x) { x.cover = r(x.cover); (x.photos || []).forEach(function (p) { p.t = r(p.t); p.ct = r(p.ct); }); });
+  if (st.batch && st.batch.photos) st.batch.photos.forEach(function (p) { p.t = r(p.t); });
+  for (k in R) if (!used[k]) delete R[k];
+  return st;
+};
 window.__bootNote = function (title, detail) {
   var b = document.querySelector(".booting"); if (!b) return;
   b.className = "booting note";
@@ -4364,6 +4401,7 @@ window.__bootNote = function (title, detail) {
 };
 setTimeout(function () { if (!window.__booted) window.__bootNote("Still loading…"); }, 25000);
 document.addEventListener("visibilitychange", function () {   // coming back into view: redraw
+  if (window.__send) window.__send("trace", { m: document.visibilityState === "visible" ? "back on screen" : "went to the background (iOS may end Vintly there: not a crash)" });
   if (document.visibilityState !== "visible") return;
   var d = document.documentElement; d.style.transform = "translateZ(0)"; void d.offsetHeight; d.style.transform = "";
 });
@@ -4371,6 +4409,7 @@ window.__boot = function (st) {
   if (window.__booted) return;
   if (!st.items || !st.items.length) st.items = [].concat.apply([], window.__parts);
   window.__parts = [];
+  window.__resolve(st);
   window.__booted = true; window.__INIT = st;
   requestAnimationFrame(function () {   // make WebKit draw again once the items are in (helps if the window came up blank)
     var d = document.documentElement; d.style.transform = "translateZ(0)"; void d.offsetHeight;
@@ -4681,6 +4720,20 @@ function releaseLock() {
 // Talks to the page with a time limit, so a stuck page can't stall the app.
 const ev = (js, ms = 20000) => Promise.race([wv.evaluateJavaScript(js, false), pause(ms).then(() => { throw new Error("the page didn't respond in " + ms / 1000 + " s"); })]);
 
+// The page gets everything: thumbnails in pieces, then the items, then the rest. Also when WebKit dropped the page.
+async function handOver() {
+  handing = true;
+  try { await handOverRun(); } finally { handing = false; if (pushLater) { pushLater = false; push(); } }
+}
+async function handOverRun() {
+  sentRefs.clear();
+  const st = clientState(), list = st.items, refs = Object.entries(st.refs || {});
+  st.items = []; delete st.refs;
+  for (let i = 0; i < refs.length; i += 8) await ev(`Object.assign(window.__refs, ${safeJSON(Object.fromEntries(refs.slice(i, i + 8)))})`);   // in pieces: no one huge message
+  for (let i = 0; i < list.length; i += 4) await ev(`window.__parts.push(${safeJSON(list.slice(i, i + 4))})`);
+  await ev(`window.__boot(${safeJSON(st)})`);
+  trace(`handed over: ${list.length} items, ${refs.length} thumbnails ${kb(refs.reduce((a, [, v]) => a + v.length, 0))}`);
+}
 async function bootApp(isClosed) {
   const t0 = Date.now();
   trace("boot: reading data", true);
@@ -4689,10 +4742,7 @@ async function bootApp(isClosed) {
   startLog(`data read in ${((Date.now() - t0) / 1000).toFixed(1)} s: ${items.length} items${loadIssues.length ? "; missing: " + loadIssues.join(", ") : ""}`);
   if (isClosed()) return;
   if (dataLoaded) { clearBatch(); prune(); }   // photos of a batch left unsorted last time, and old posted items
-  const st = clientState(), list = st.items;
-  st.items = [];
-  for (let i = 0; i < list.length; i += 2) await ev(`window.__parts.push(${safeJSON(list.slice(i, i + 2))})`);   // in pieces: thumbnails make items heavy
-  await ev(`window.__boot(${safeJSON(st)})`);
+  await handOver();
   let seen = "";
   try { seen = await ev(`document.visibilityState + ", " + innerWidth + "x" + innerHeight`, 5000); } catch (e) { seen = String(e.message || e); }
   startLog(`screen ready in ${((Date.now() - t0) / 1000).toFixed(1)} s (page: ${seen})`);
@@ -4746,14 +4796,25 @@ async function main() {
     try { log = FileManager.local().readString(LOG_PATH).split("\n").slice(-12).join("\n"); } catch (x) {}
     if (!closed) wv.evaluateJavaScript(`window.__bootNote("Vintly couldn't open", ${safeJSON(log)})`, false).catch(() => {});
   });
-  // Is the page still alive? WebKit can drop a page that ran out of memory: it then stops answering.
-  let quiet = 0;
+  // Is the page still alive? WebKit can drop a page that ran out of memory: it stops answering, or comes back empty.
+  // An empty page gets Vintly's page and all the data again. A quiet minute leaves a "still open" mark in the log.
+  let quiet = 0, lastMark = Date.now(), reviving = false;
   const beat = Timer.schedule(15000, true, async () => {
     if (closed || !wv) { beat.invalidate(); return; }
-    if (!traceOn()) return;
+    if (!dataLoaded || reviving) return;
     const t0 = Date.now();
-    try { await Promise.race([wv.evaluateJavaScript("1", false), pause(6000).then(() => { throw new Error("no answer in 6 s"); })]); if (quiet) trace(`page answers again (after ${quiet} missed checks)`); quiet = 0; if (Date.now() - t0 > 2000) trace(`page slow: answered in ${Date.now() - t0} ms`); }
-    catch (e) { quiet++; trace(`PAGE NOT ANSWERING (${quiet}): ${e.message || e}. WebKit may have dropped the page (memory?)`, true); }
+    try {
+      const up = await Promise.race([wv.evaluateJavaScript("window.__booted ? 1 : 0", false), pause(6000).then(() => { throw new Error("no answer in 6 s"); })]);
+      if (quiet) trace(`page answers again (after ${quiet} missed checks)`);
+      quiet = 0;
+      if (Date.now() - t0 > 2000) trace(`page slow: answered in ${Date.now() - t0} ms`);
+      if (up !== 1) {
+        reviving = true;
+        trace("PAGE WAS EMPTY: WebKit dropped it (memory?). Building it again", true);
+        try { await wv.loadHTML(buildHTML()); await handOver(); toast("Vintly's screen was reloaded"); track("page_revived"); } catch (e) { traceErr("rebuilding the page", e); }
+        reviving = false;
+      } else if (traceOn() && Date.now() - lastMark > 60000 && traceLines.length && Date.now() - traceT0 - parseFloat((traceLines[traceLines.length - 1].match(/\+([\d.]+)s/) || [])[1] || 0) * 1000 > 55000) { trace("still open, page answers"); lastMark = Date.now(); }
+    } catch (e) { quiet++; trace(`PAGE NOT ANSWERING (${quiet}): ${e.message || e}. WebKit may have dropped the page (memory?)`, true); }
   });
   await presented;
   closed = true;
