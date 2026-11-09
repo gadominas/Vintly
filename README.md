@@ -19,6 +19,13 @@ Photograph it. Check the price. Tap **Post**.<br>Vintly sorts the photos into it
 
 </div>
 
+## See it in action
+
+<p align="center">
+  <a href="docs/media/intro.mp4"><img src="docs/media/intro-preview.webp" width="300" alt="Vintly in 14 seconds: photos picked, sorted into items, prepared two at a time, priced, posted, and live on Vinted"></a>
+</p>
+<p align="center"><a href="docs/media/intro.mp4"><b>▶ Watch the full intro</b></a> (1 min 40 s, with sound). A real session: a pile of kids' shoes, from photos to live Vinted listings.</p>
+
 <p align="center">
   <img src="docs/screenshots/01-list.png" width="31%" alt="Items to post, each with a photo, title and price">
   <img src="docs/screenshots/02-sort.png" width="31%" alt="New photos sorted into three items">
