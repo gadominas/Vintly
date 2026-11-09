@@ -1,12 +1,14 @@
+<a href="#install"><img src="docs/banner.png" width="100%" alt="Vintly. Snap. Price. Sell. Phone photos in, Vinted listings out: written, priced and posted for you."></a>
+
 <div align="center">
 
-<img src="docs/logo.svg" width="96" alt="Vintly logo: a price tag with a teal hole and an amber line">
+## Turn the pile you no longer need into money.
 
-# Vintly
+Photograph it. Check the price. Tap **Post**.<br>Vintly sorts the photos into items, cleans them, writes each listing, fills every Vinted field and suggests a fair price.
 
-**Snap. Price. Sell.**
+<a href="#install"><img src="docs/cta-install.png" height="52" alt="Install Vintly free"></a>&nbsp;&nbsp;<a href="CHANGELOG.md"><img src="docs/cta-new.png" height="52" alt="See what's new"></a>
 
-Photograph what you no longer need and Vintly turns the photos into Vinted listings: sorted into items, cleaned, written, priced and posted after your tap.<br>An iPhone and iPad app for [Scriptable](https://scriptable.app). One file, no server, no sign-up.
+<sub>Free and open source, for iPhone and iPad, inside the free Scriptable app. One file, no server, no sign-up. Bring your own Claude or OpenAI key.</sub>
 
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgadominas%2FVintly%2Fmain%2Freleases.json&query=%24.releases%5B0%5D.version&label=version&color=2DD4BF&labelColor=0E1116&style=flat-square)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/iOS-Scriptable-171B22?style=flat-square&labelColor=0E1116)](https://apps.apple.com/app/scriptable/id1405459188)
