@@ -2,6 +2,13 @@
 
 All notable changes to Vintly. Generated from `releases.json`; edit that file, not this one.
 
+## 1.10.2 (2026-11-09): Conversations fit the screen
+
+
+**Fixes**
+
+- In a conversation, a long item title made the whole page wider than the screen, so your own messages ran off the right edge: the title now wraps and every message stays inside, long words and links included
+
 ## 1.10.1 (2026-11-09): Lighter on memory, and back if the screen drops
 
 

@@ -4,6 +4,16 @@
   "script": "Vintly.js",
   "releases": [
     {
+      "version": "1.10.2",
+      "date": "2026-11-09",
+      "title": "Conversations fit the screen",
+      "highlights": [],
+      "changes": [],
+      "fixes": [
+        "In a conversation, a long item title made the whole page wider than the screen, so your own messages ran off the right edge: the title now wraps and every message stays inside, long words and links included"
+      ]
+    },
+    {
       "version": "1.10.1",
       "date": "2026-11-09",
       "title": "Lighter on memory, and back if the screen drops",

@@ -29,7 +29,7 @@
  */
 
 // This build's version. When releasing, bump it and add a matching entry to releases.json.
-const VERSION = '1.10.1';
+const VERSION = '1.10.2';
 const APP_ID = 'vintly';   // unique per app, never changes
 const REPO_RAW = 'https://raw.githubusercontent.com/gadominas/Vintly/main/';
 const REPO_URL = 'https://github.com/gadominas/Vintly';
@@ -4005,15 +4005,16 @@ body.d-tiny .thumbs img,body.d-tiny .thumbs .noimg{width:44px;height:54px}
 .v-hero{width:100%;max-height:52vh;object-fit:contain;border-radius:14px;background:var(--rule)}
 .v-price{font-size:calc(26px * var(--ts));font-weight:800;margin:10px 0 2px}
 #convsheet{display:flex;flex-direction:column;overflow:hidden}
-#convsheet .conv-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+#convsheet .conv-body{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;width:100%;min-width:0}   /* width: a centred (margin:auto) flex child otherwise grows to its widest line */
+#convsheet .cv-item{white-space:normal;overflow-wrap:anywhere;margin:0 0 8px}
 .bubbles{display:flex;flex-direction:column;gap:8px;padding:6px 0 10px}
-.bub{max-width:82%;display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-radius:16px;font-size:calc(15px * var(--ts));line-height:1.35}
+.bub{max-width:82%;min-width:0;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:2px;padding:9px 12px;border-radius:16px;font-size:calc(15px * var(--ts));line-height:1.35}
 .bub small{font-size:calc(11px * var(--ts));opacity:.7}
 .bub.them{align-self:flex-start;background:var(--sheet);border:1px solid var(--rule);border-bottom-left-radius:5px}
 .bub.me{align-self:flex-end;background:var(--signal);color:var(--paper);border-bottom-right-radius:5px}
 .bub.sys{align-self:center;background:var(--amber-wash,var(--rule));color:var(--ink);border-radius:12px;font-size:calc(13px * var(--ts))}
 .composer{flex:none;display:flex;gap:8px;align-items:flex-end;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid var(--rule);background:var(--paper)}
-.composer textarea{flex:1;font-size:16px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);padding:9px 11px;resize:none;font-family:inherit}
+.composer textarea{flex:1;min-width:0;font-size:16px;border-radius:12px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);padding:9px 11px;resize:none;font-family:inherit}
 .cmp-btns{display:flex;flex-direction:column;gap:6px}
 .sh-head{position:sticky;top:0;z-index:2;background:var(--paper);display:flex;justify-content:space-between;align-items:center;gap:12px;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;border-bottom:1px solid var(--rule)}
 .sh-head h2{font:700 calc(24px * var(--ts))/1.1 var(--display);margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
